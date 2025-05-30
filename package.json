@@ -1,0 +1,48 @@
+{
+  "name": "ih-libiec61850-node",
+  "version": "1.0.0",
+  "description": "Node.js addon for IEC 61850 client (MMS, GOOSE) using libiec61850",
+  "main": "index.js",
+  "scripts": {
+    "configure": "node-gyp configure",
+    "build": "node-gyp build",
+    "prebuild": "prebuild --target=20.19.0 --napi-versions 11",
+    "prebuild-upload": "prebuild --upload-all"   
+  },
+  "keywords": [
+    "native",
+    "addon",
+    "cross-platform"
+  ],
+  "author": "Amigo9090",
+  "license": "MIT",
+  "files": [
+    "index.js",
+    "builds/",
+    "examples/"
+  ],
+  "dependencies": {
+    "node-addon-api": "^7.0.0"
+  },
+  "devDependencies": {
+    "prebuild": "12.1.0",
+    "node-gyp": "^10.1.0",
+    "node-addon-api": "^7.1.1"
+  },
+  "os": [
+    "darwin",
+    "linux",
+    "win32"
+  ],
+  "cpu": [
+    "x64",
+    "ia32",
+    "arm64",
+    "arm"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/intrahouseio/ih-libiec61850-node.git"
+  },
+  "homepage": "https://github.com/intrahouseio/ih-libiec61850-node#readme"
+}
