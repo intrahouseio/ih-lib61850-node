@@ -4,7 +4,7 @@
 
 Napi::Object InitAll(Napi::Env env, Napi::Object exports) {
     MmsClient::Init(env, exports);
-    NodeGooseSubscriber::Init(env, exports);
+    NodeGOOSESubscriber::Init(env, exports);
     return exports;
 }
 

@@ -21,8 +21,9 @@
       ],
       "include_dirs": [
         "<!@(node -p \"require('node-addon-api').include\")",
-        "include/libiec61850",       
-        "src"        
+        "include/libiec61850", 
+        "include/pugixml",        
+        "src",        
       ],
       "defines": ["NAPI_CPP_EXCEPTIONS"],
       "cflags": ["-Wall", "-Wno-unused-parameter"],

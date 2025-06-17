@@ -91,6 +91,7 @@ INCS_Debug := \
 	-I/Users/andreypetrov/Library/Caches/node-gyp/23.9.0/deps/v8/include \
 	-I/Users/andreypetrov/Downloads/libiec61850-node/node_modules/node-addon-api \
 	-I$(srcdir)/include/libiec61850 \
+	-I$(srcdir)/include/pugixml \
 	-I$(srcdir)/src
 
 DEFS_Release := \
@@ -150,6 +151,7 @@ INCS_Release := \
 	-I/Users/andreypetrov/Library/Caches/node-gyp/23.9.0/deps/v8/include \
 	-I/Users/andreypetrov/Downloads/libiec61850-node/node_modules/node-addon-api \
 	-I$(srcdir)/include/libiec61850 \
+	-I$(srcdir)/include/pugixml \
 	-I$(srcdir)/src
 
 OBJS := \

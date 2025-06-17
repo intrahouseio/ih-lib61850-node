@@ -59,7 +59,7 @@ public:
 private:
     static Napi::FunctionReference constructor;
 
-    Napi::Value Connect(const Napi::CallbackInfo& info);
+     Napi::Value Connect(const Napi::CallbackInfo& info);
     Napi::Value ReadData(const Napi::CallbackInfo& info);
     Napi::Value Close(const Napi::CallbackInfo& info);
     Napi::Value GetStatus(const Napi::CallbackInfo& info);
@@ -74,7 +74,7 @@ private:
     Napi::Value BrowseDataModel(const Napi::CallbackInfo& info);
 
     Napi::Value EnableReporting(const Napi::CallbackInfo& info);
-    Napi::Value DisableReporting(const Napi::CallbackInfo& info);
+    Napi::Value DisableReporting(const Napi::CallbackInfo& info);     
 
     static void ReportCallback(void* parameter, ClientReport report);
    
