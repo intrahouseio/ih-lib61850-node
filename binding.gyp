@@ -2,7 +2,6 @@
   "variables": {
     "openssl_fips%": ""
   },
-  
   "targets": [
     {
       "target_name": "addon_iec61850",
@@ -11,24 +10,36 @@
         "src/mms_client.cc",
         "src/goose_subscriber.cc"
       ],
-      "actions": [
-        {
-          "action_name": "print_variable",
-          "inputs": [],
-          "outputs": ["print_output"],
-          "action": ["echo", "openssl_fips: $(openssl_fips)"]
-        }
-      ],
       "include_dirs": [
         "<!@(node -p \"require('node-addon-api').include\")",
-        "include/libiec61850", 
-        "include/pugixml",        
-        "src",        
+        "<(module_root_dir)/include/libiec61850",
+        "<(module_root_dir)/include/mbedtls-install/include"
       ],
-      "defines": ["NAPI_CPP_EXCEPTIONS"],
-      "cflags": ["-Wall", "-Wno-unused-parameter"],
-      "cflags_cc": ["-Wall", "-Wno-unused-parameter", "-std=c++17", "-fexceptions"],
+      "defines": ["NAPI_DISABLE_CPP_EXCEPTIONS"],
       "conditions": [
+        ["OS=='win' and target_arch=='x64'", {
+          "libraries": [
+            "<(module_root_dir)/lib/build/libiec61850-Windows-latest-x64.lib",
+            "<(module_root_dir)/include/mbedtls-install/lib/mbedtls.lib",
+            "<(module_root_dir)/include/mbedtls-install/lib/mbedx509.lib",
+            "<(module_root_dir)/include/mbedtls-install/lib/mbedcrypto.lib",
+            "-lws2_32.lib",
+            "-liphlpapi.lib",
+            "-lbcrypt.lib"
+          ],
+          "msvs_settings": {
+            "VCCLCompilerTool": {
+              "ExceptionHandling": 0,
+              "AdditionalOptions": ["/std:c++17", "/D_CRT_SECURE_NO_WARNINGS"]
+            },
+            "VCLinkerTool": {
+              "AdditionalLibraryDirectories": [
+                "<(module_root_dir)/lib/build",
+                "<(module_root_dir)/include/mbedtls-install/lib"
+              ]
+            }
+          }
+        }],
         ["OS=='mac' and target_arch=='arm64'", {
           "xcode_settings": {
             "GCC_ENABLE_CPP_EXCEPTIONS": "YES",
@@ -75,21 +86,6 @@
           "libraries": [
             "<(module_root_dir)/lib/build/libiec61850-ubuntu-latest-arm.a",
             "-lpthread"
-          ]
-        }],
-        ["OS=='win' and target_arch=='x64'", {
-          "msvs_settings": {
-            "VCCLCompilerTool": {
-              "ExceptionHandling": 1,
-              "AdditionalOptions": ["/std:c++17"]
-            }
-          },
-          "libraries": [
-            "<(module_root_dir)/lib/build/libiec61850-windows-latest-x64.lib",
-            "-lws2_32.lib",
-            "-liphlpapi.lib",
-            "-lbcrypt.lib",
-            "-lmsvcrt.lib"
           ]
         }]
       ]
