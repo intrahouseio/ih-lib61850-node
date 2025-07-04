@@ -29,13 +29,13 @@ jobs:
           gh release delete v${{ steps.package-version.outputs.version }} --yes || true
           git push origin :refs/tags/v${{ steps.package-version.outputs.version }} || true
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
 
       - name: Create Release
         id: create_release
         uses: softprops/action-gh-release@v2
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
         with:
           tag_name: v${{ steps.package-version.outputs.version }}
           name: Release v${{ steps.package-version.outputs.version }}
@@ -137,7 +137,7 @@ jobs:
             echo "output_dir=macos_arm64" >> $GITHUB_OUTPUT
           elif [ "${{ matrix.os }}" == "ubuntu-latest" ] && [ "${{ matrix.arch }}" == "x64" ]; then
             echo "output_dir=linux_x64" >> $GITHUB_OUTPUT
-          elif [ "${{ matrix.os }}" == "ubuntu-latest" ] && [ "${{ matrix.arch }}" == "arm64" ];v
+          elif [ "${{ matrix.os }}" == "ubuntu-latest" ] && [ "${{ matrix.arch }}" == "arm64" ]; then
             echo "output_dir=linux_arm64" >> $GITHUB_OUTPUT
           elif [ "${{ matrix.os }}" == "ubuntu-latest" ] && [ "${{ matrix.arch }}" == "arm" ]; then
             echo "output_dir=linux_arm" >> $GITHUB_OUTPUT
@@ -221,7 +221,7 @@ jobs:
       - name: Upload prebuilt binaries to GitHub Releases
         uses: softprops/action-gh-release@v2
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
         with:
           tag_name: v${{ steps.package-version.outputs.version }}
           files: prebuilds/ih-libiec61850-node-v${{ steps.package-version.outputs.version }}-node-v128-${{ steps.determine-platform-unix.outputs.platform || steps.determine-platform-windows.outputs.platform }}-${{ matrix.arch }}.tar.gz
@@ -364,4 +364,5 @@ jobs:
           # Пушим изменения и тег в репозиторий
           git push origin main --tags
         env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
