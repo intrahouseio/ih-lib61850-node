@@ -7,7 +7,7 @@
     "configure": "node-gyp configure",
     "build": "node-gyp build",
     "prebuild": "prebuild --target=20.19.0 --napi-versions 11",
-    "prebuild-upload": "prebuild --upload-all"   
+    "prebuild-upload": "prebuild --upload-all"
   },
   "keywords": [
     "native",

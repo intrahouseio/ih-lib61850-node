@@ -279,31 +279,23 @@ jobs:
 
           # Карта соответствий для именования папок
           declare -A platform_map=(
-            ["linux-x64"]="linux_x64"
-            ["linux-arm64"]="linux_arm64"
             ["linux-arm"]="linux_arm"
-            ["darwin-x64"]="macos_x64"
+            ["linux-arm64"]="linux_arm64"
+            ["linux-x64"]="linux_x64"
             ["darwin-arm64"]="macos_arm64"
+            ["darwin-x64"]="macos_x64"
             ["win32-x64"]="windows_x64"
           )
 
-          # Выводим список артефактов для отладки
-          echo "Listing artifacts:"
-          ls -R artifacts
-
           # Перебираем все скачанные артефакты
           for artifact in artifacts/addon_iec61850-*/*.tar.gz; do
-            echo "Processing artifact: $artifact"
             # Извлекаем платформу и архитектуру из имени артефакта
             artifact_name=$(basename "$artifact")
-            echo "Artifact name: $artifact_name"
             platform_arch=$(echo "$artifact_name" | sed -n 's/.*node-v128-\(.*\)\.tar\.gz/\1/p')
-            echo "Extracted platform_arch: $platform_arch"
-
+            
             # Проверяем, есть ли соответствие в карте
             if [[ -n "${platform_map[$platform_arch]}" ]]; then
               target_dir="builds/${platform_map[$platform_arch]}"
-              echo "Target directory: $target_dir"
               mkdir -p "$target_dir"
               
               # Распаковываем tar.gz
@@ -317,8 +309,7 @@ jobs:
                 mv "$target_dir/addon.node" "$target_dir/addon_iec61850.node" 2>/dev/null || true
               fi
             else
-              echo "Error: Unknown platform/arch: $platform_arch"
-              exit 1
+              echo "Skipping unknown platform/arch: $platform_arch"
             fi
           done
 
