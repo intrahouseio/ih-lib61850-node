@@ -774,7 +774,7 @@ Napi::Value MmsClient::GetDataSetDirectory(const Napi::CallbackInfo& info) {
             deferred.Reject(Napi::Error::New(env, "Failed to get dataset directory, error: " + std::to_string(error)).Value());
             return deferred.Promise();
         }
-
+  
         // Collect dataset references
         std::vector<std::string> dataSets;
         LinkedList current = dataSetList;
