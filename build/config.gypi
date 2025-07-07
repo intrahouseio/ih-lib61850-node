@@ -487,7 +487,7 @@
     "target": "20.19.0",
     "build_v8_with_gn": "false",
     "global_prefix": "/opt/homebrew",
-    "local_prefix": "/Users/andreypetrov/Downloads/libiec61850-node",
+    "local_prefix": "/Users/andreypetrov/Downloads/ih-lib61850-node",
     "globalconfig": "/opt/homebrew/etc/npmrc",
     "userconfig": "/Users/andreypetrov/.npmrc",
     "init_module": "/Users/andreypetrov/.npm-init.js",

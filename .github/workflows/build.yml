@@ -230,7 +230,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: addon_iec61850-${{ matrix.os }}-${{ matrix.arch }}
-          path: prebuilds/ih-libiec61850-node-v${{ steps.package-version.outputs.version }}-node-v128-${{ steps.determine-platform-unix.outputs.platform || steps.determine-platform-windows.outputs.platform }}-${{ matrix.arch }}.tar.gz
+          path: prebuilds/@amigo9090/ih-libiec61850-node-v${{ steps.package-version.outputs.version }}-node-v128-${{ steps.determine-platform-unix.outputs.platform || steps.determine-platform-windows.outputs.platform }}-${{ matrix.arch }}.tar.gz
+        run: |
+          echo "Listing prebuilds directory before upload:"
+          ls -l prebuilds/@amigo9090/ || echo "No prebuilds directory found"
 
   update-builds-and-publish:
     needs: build-and-upload
@@ -273,47 +276,45 @@ jobs:
 
       - name: Update builds folder
         run: |
-          # Очищаем папку builds, если она существует
           rm -rf builds
           mkdir -p builds
-
-          # Карта соответствий для именования папок
           declare -A platform_map=(
-            ["linux-arm"]="linux_arm"
-            ["linux-arm64"]="linux_arm64"
             ["linux-x64"]="linux_x64"
-            ["darwin-arm64"]="macos_arm64"
+            ["linux-arm64"]="linux_arm64"
+            ["linux-arm"]="linux_arm"
             ["darwin-x64"]="macos_x64"
+            ["darwin-arm64"]="macos_arm64"
             ["win32-x64"]="windows_x64"
           )
-
-          # Перебираем все скачанные артефакты
-          for artifact in artifacts/addon_iec61850-*/*.tar.gz; do
-            # Извлекаем платформу и архитектуру из имени артефакта
-            artifact_name=$(basename "$artifact")
-            platform_arch=$(echo "$artifact_name" | sed -n 's/.*node-v128-\(.*\)\.tar\.gz/\1/p')
-            
-            # Проверяем, есть ли соответствие в карте
-            if [[ -n "${platform_map[$platform_arch]}" ]]; then
-              target_dir="builds/${platform_map[$platform_arch]}"
-              mkdir -p "$target_dir"
-              
-              # Распаковываем tar.gz
-              tar -xzf "$artifact" -C "$target_dir" --strip-components=1
-              
-              # Перемещаем addon_iec61850.node из Release в корень target_dir
-              if [ -f "$target_dir/Release/addon_iec61850.node" ]; then                
-                mv "$target_dir/Release/addon_iec61850.node" "$target_dir/"
-                rm -rf "$target_dir/Release"
+          echo "Listing artifacts:"
+          ls -R artifacts
+          if compgen -G "artifacts/addon_iec61850-*/@amigo9090/*.tar.gz" > /dev/null; then
+            for artifact in artifacts/addon_iec61850-*/@amigo9090/*.tar.gz; do
+              echo "Processing artifact: $artifact"
+              artifact_name=$(basename "$artifact")
+              echo "Artifact name: $artifact_name"
+              platform_arch=$(echo "$artifact_name" | sed -n 's/.*node-v128-\(.*\)\.tar\.gz/\1/p')
+              echo "Extracted platform_arch: $platform_arch"
+              if [[ -n "${platform_map[$platform_arch]}" ]]; then
+                target_dir="builds/${platform_map[$platform_arch]}"
+                echo "Target directory: $target_dir"
+                mkdir -p "$target_dir"
+                tar -xzf "$artifact" -C "$target_dir" --strip-components=1
+                if [ -f "$target_dir/Release/addon_iec61850.node" ]; then
+                  mv "$target_dir/Release/addon_iec61850.node" "$target_dir/"
+                  rm -rf "$target_dir/Release"
+                else
+                  mv "$target_dir/addon.node" "$target_dir/addon_iec61850.node" 2>/dev/null || true
+                fi
               else
-                mv "$target_dir/addon.node" "$target_dir/addon_iec61850.node" 2>/dev/null || true
+                echo "Error: Unknown platform/arch: $platform_arch"
+                exit 1
               fi
-            else
-              echo "Skipping unknown platform/arch: $platform_arch"
-            fi
-          done
-
-          # Проверяем содержимое папки builds
+            done
+          else
+            echo "Error: No artifacts found matching 'artifacts/addon_iec61850-*/*.tar.gz'"
+            exit 1
+          fi
           ls -R builds
         shell: bash
 
