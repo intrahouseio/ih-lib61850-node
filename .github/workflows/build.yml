@@ -224,13 +224,13 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
         with:
           tag_name: v${{ steps.package-version.outputs.version }}
-          files: prebuilds/ih-libiec61850-node-v${{ steps.package-version.outputs.version }}-node-v128-${{ steps.determine-platform-unix.outputs.platform || steps.determine-platform-windows.outputs.platform }}-${{ matrix.arch }}.tar.gz
+          files: prebuilds/amigo9090-ih-libiec61850-node-v${{ steps.package-version.outputs.version }}-node-v128-${{ steps.determine-platform-unix.outputs.platform || steps.determine-platform-windows.outputs.platform }}-${{ matrix.arch }}.tar.gz
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: addon_iec61850-${{ matrix.os }}-${{ matrix.arch }}
-          path: prebuilds/ih-libiec61850-node-v${{ steps.package-version.outputs.version }}-node-v128-${{ steps.determine-platform-unix.outputs.platform || steps.determine-platform-windows.outputs.platform }}-${{ matrix.arch }}.tar.gz
+          path: prebuilds/amigo9090-ih-libiec61850-node-v${{ steps.package-version.outputs.version }}-node-v128-${{ steps.determine-platform-unix.outputs.platform || steps.determine-platform-windows.outputs.platform }}-${{ matrix.arch }}.tar.gz
 
   update-builds-and-publish:
     needs: build-and-upload
@@ -313,10 +313,6 @@ jobs:
             fi
           done
 
-          # Проверяем содержимое папки builds
-          ls -R builds
-        shell: bash
-
       - name: Verify builds folder
         run: |
           for dir in linux_arm linux_arm64 linux_x64 macos_arm64 macos_x64 windows_x64; do
@@ -330,7 +326,7 @@ jobs:
       - name: Check if version is unique
         run: |
           VERSION=$(node -p "require('./package.json').version")
-          if npm view ih-libiec61850-node@$VERSION version > /dev/null 2>&1; then
+          if npm view @amigo9090/ih-libiec61850-node@$VERSION version > /dev/null 2>&1; then
             echo "Version $VERSION already exists in npm!"
             exit 1
           fi
