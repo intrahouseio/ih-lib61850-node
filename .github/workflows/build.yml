@@ -397,6 +397,4 @@ jobs:
           
           # Пушим изменения и тег в репозиторий
           git push https://$GIT_TOKEN@github.com/$GITHUB_REPOSITORY.git main --tags
-        env:
-          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        shell: bash
