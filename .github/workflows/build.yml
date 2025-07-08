@@ -171,19 +171,19 @@ jobs:
         if: matrix.os != 'windows-latest'
         run: |
           if [ "${{ matrix.os }}" == "macos-latest" ] && [ "${{ matrix.arch }}" == "x64" ]; then
-            arch -x86_64 npm run prebuild -- --arch x64 --macos-min-version=11.0
+            arch -x86_64 npm run prebuild -- --target 20.19.0 --arch x64 --macos-min-version=11.0
           elif [ "${{ matrix.os }}" == "ubuntu-latest" ] && [ "${{ matrix.arch }}" == "arm" ]; then
             export CC=arm-linux-gnueabihf-gcc
             export CXX=arm-linux-gnueabihf-g++
             export LINK=arm-linux-gnueabihf-g++
-            npm run prebuild -- --arch arm --cflags="-march=armv7-a -mfpu=vfp -mfloat-abi=hard"
+            npm run prebuild -- --target 20.19.0 --arch arm --cflags="-march=armv7-a -mfpu=vfp -mfloat-abi=hard"
           elif [ "${{ matrix.os }}" == "ubuntu-latest" ] && [ "${{ matrix.arch }}" == "arm64" ]; then
             export CC=aarch64-linux-gnu-gcc
             export CXX=aarch64-linux-gnu-g++
             export LINK=aarch64-linux-gnu-g++
-            npm run prebuild -- --arch arm64
+            npm run prebuild -- --target 20.19.0 --arch arm64
           else
-            npm run prebuild -- --arch ${{ matrix.arch }}
+            npm run prebuild -- --target 20.19.0 --arch ${{ matrix.arch }}
           fi
         shell: bash
 
@@ -293,35 +293,54 @@ jobs:
             ["win32-x64"]="windows_x64"
           )
 
+          # Выводим структуру артефактов для отладки
+          echo "Artifact structure:"
+          find artifacts -type f
+
           # Перебираем все скачанные артефакты
           for artifact_dir in artifacts/addon_iec61850-*; do
-            for tarball in "$artifact_dir"/prebuilds/@amigo9090/*.tar.gz; do
-              # Извлекаем платформу и архитектуру из имени файла
-              filename=$(basename "$tarball")
-              platform_arch=$(echo "$filename" | sed -n 's/.*-node-v[0-9]*-\(.*\)\.tar\.gz/\1/p')
-              
-              # Проверяем, есть ли соответствие в карте
-              if [[ -n "${platform_map[$platform_arch]}" ]]; then
-                target_dir="builds/${platform_map[$platform_arch]}"
-                mkdir -p "$target_dir"
-                
-                # Распаковываем tar.gz
-                tar -xzf "$tarball" -C "$target_dir" --strip-components=1
-                
-                # Перемещаем addon_iec61850.node из Release в корень target_dir
-                if [ -f "$target_dir/Release/addon_iec61850.node" ]; then                
-                  mv "$target_dir/Release/addon_iec61850.node" "$target_dir/"
-                  rm -rf "$target_dir/Release"
+            echo "Processing artifact directory: $artifact_dir"
+            if [ -d "$artifact_dir/prebuilds/@amigo9090" ]; then
+              for tarball in "$artifact_dir/prebuilds/@amigo9090"/*.tar.gz; do
+                if [ -f "$tarball" ]; then
+                  echo "Processing tarball: $tarball"
+                  # Извлекаем имя файла
+                  filename=$(basename "$tarball")
+                  echo "Filename: $filename"
+                  # Извлекаем платформу и архитектуру из имени файла
+                  platform_arch=$(echo "$filename" | sed -n 's/ih-libiec61850-node-v[0-9.]*-\(node-v[0-9]*\|napi\)-\(.*\)\.tar\.gz/\2/p')
+                  echo "Extracted platform_arch: $platform_arch"
+                  
+                  # Проверяем, есть ли соответствие в карте
+                  if [[ -n "${platform_map[$platform_arch]}" ]]; then
+                    target_dir="builds/${platform_map[$platform_arch]}"
+                    echo "Target directory: $target_dir"
+                    mkdir -p "$target_dir"
+                    
+                    # Распаковываем tar.gz
+                    tar -xzf "$tarball" -C "$target_dir" --strip-components=1
+                    
+                    # Перемещаем addon_iec61850.node из Release в корень target_dir
+                    if [ -f "$target_dir/Release/addon_iec61850.node" ]; then                
+                      mv "$target_dir/Release/addon_iec61850.node" "$target_dir/"
+                      rm -rf "$target_dir/Release"
+                    else
+                      mv "$target_dir/addon.node" "$target_dir/addon_iec61850.node" 2>/dev/null || true
+                    fi
+                  else
+                    echo "Skipping unknown platform/arch: $platform_arch"
+                  fi
                 else
-                  mv "$target_dir/addon.node" "$target_dir/addon_iec61850.node" 2>/dev/null || true
+                  echo "No tar.gz files found in $artifact_dir/prebuilds/@amigo9090"
                 fi
-              else
-                echo "Skipping unknown platform/arch: $platform_arch"
-              fi
-            done
+              done
+            else
+              echo "Directory $artifact_dir/prebuilds/@amigo9090 does not exist"
+            fi
           done
 
           # Проверяем содержимое папки builds
+          echo "Builds folder contents:"
           ls -R builds
         shell: bash
 
