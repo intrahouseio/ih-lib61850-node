@@ -369,7 +369,6 @@ jobs:
 
       - name: Publish to npm
         env:
-          GIT_TOKEN: ${{ secrets.RELEASE_TOKEN }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           # Настраиваем Git для коммитов
@@ -397,24 +396,10 @@ jobs:
           
           # Восстанавливаем оригинальный package.json
           git checkout -- package.json
-          
-          # Отладка: проверяем текущий удалённый URL
-          echo "Current git remote URL:"
-          git remote -v
-          
-          # Устанавливаем удалённый URL с токеном
-          git remote set-url origin "https://${{ github.actor }}:$GIT_TOKEN@github.com/$GITHUB_REPOSITORY.git"
-          
-          # Отладка: проверяем новый удалённый URL
-          echo "Updated git remote URL:"
-          git remote -v
-          
-          # Отладка: выводим последние коммиты и теги
-          echo "Recent commits:"
-          git log --oneline -n 2
-          echo "Current tags:"
-          git tag
-          
-          # Пушим изменения и тег в репозиторий
-          git push origin main --tags
-        shell: bash
+
+      - name: Push changes
+        uses: ad-m/github-push-action@master
+        with:
+          github_token: ${{ secrets.RELEASE_TOKEN }}
+          branch: main
+          tags: true
