@@ -395,6 +395,8 @@ jobs:
           # Восстанавливаем оригинальный package.json с scripts и devDependencies
           git checkout -- package.json
           
+          # Устанавливаем удалённый URL с токеном
+          git remote set-url origin https://$GIT_TOKEN@github.com/$GITHUB_REPOSITORY.git
           # Пушим изменения и тег в репозиторий
-          git push https://$GIT_TOKEN@github.com/$GITHUB_REPOSITORY.git main --tags
+          git push origin main --tags
         shell: bash
