@@ -368,6 +368,9 @@ jobs:
         shell: bash
 
       - name: Publish to npm
+        env:
+          GIT_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           # Настраиваем Git для коммитов
           git config --global user.name "GitHub Actions"
@@ -393,7 +396,7 @@ jobs:
           git checkout -- package.json
           
           # Пушим изменения и тег в репозиторий
-          git push https://$RELEASE_TOKEN@github.com/intrahouseio/ih-lib61850-node.git main --tags
+          git push https://$GIT_TOKEN@github.com/$GITHUB_REPOSITORY.git main --tags
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
