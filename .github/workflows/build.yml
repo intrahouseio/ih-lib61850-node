@@ -372,31 +372,26 @@ jobs:
           GIT_TOKEN: ${{ secrets.RELEASE_TOKEN }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          # Настраиваем Git для коммитов
+          # Настраиваем Git
           git config --global user.name "GitHub Actions"
           git config --global user.email "actions@github.com"
           
-          # Создаем временную копию package.json без scripts и devDependencies для npm
+          # Исправляем URL для аутентификации
+          git remote set-url origin "https://x-access-token:$GIT_TOKEN@github.com/$GITHUB_REPOSITORY.git"
+          
+          # Создаем временный package.json для npm
           jq 'del(.scripts) | del(.devDependencies)' package.json > package_npm.json
           
-          # Добавляем только builds/ в индекс Git
+          # Добавляем builds в коммит
           git add builds/
-          # Создаем коммит с изменениями (без package.json)
-          git commit -m "Update builds for release" || echo "No changes to commit"
+          git commit -m "Update builds for v${{ steps.package-version.outputs.version }}" || echo "No changes to commit"
           
-          # Обновляем версию в оригинальном package.json  
-          npm version patch -m "Release %s with updated builds"
-          
-          # Заменяем package.json на версию без scripts и devDependencies только для npm publish
+          # Восстанавливаем оригинальный package.json
           mv package_npm.json package.json
+          
           # Публикуем в npm
           npm publish --access public
           
-          # Восстанавливаем оригинальный package.json с scripts и devDependencies
-          git checkout -- package.json
-          
-          # Устанавливаем удалённый URL с токеном
-          git remote set-url origin https://$GIT_TOKEN@github.com/$GITHUB_REPOSITORY.git
-          # Пушим изменения и тег в репозиторий
-          git push origin main --tags
-        shell: bash
+          # Создаем тег и пушим изменения
+          git tag -a "v${{ steps.package-version.outputs.version}}" -m "Release v${{ steps.package-version.outputs.version}}"
+          git push origin main --follow-tags
