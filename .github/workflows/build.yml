@@ -393,7 +393,7 @@ jobs:
           git checkout -- package.json
           
           # Пушим изменения и тег в репозиторий
-          git push origin main --tags
+          git push https://$RELEASE_TOKEN@github.com/intrahouseio/ih-lib61850-node.git main --tags
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
