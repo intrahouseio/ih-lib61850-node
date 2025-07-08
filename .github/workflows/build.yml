@@ -300,8 +300,8 @@ jobs:
           # Перебираем все скачанные артефакты
           for artifact_dir in artifacts/addon_iec61850-*; do
             echo "Processing artifact directory: $artifact_dir"
-            if [ -d "$artifact_dir/prebuilds/@amigo9090" ]; then
-              for tarball in "$artifact_dir/prebuilds/@amigo9090"/*.tar.gz; do
+            if [ -d "$artifact_dir" ]; then
+              for tarball in "$artifact_dir"/*.tar.gz; do
                 if [ -f "$tarball" ]; then
                   echo "Processing tarball: $tarball"
                   # Извлекаем имя файла
@@ -320,6 +320,10 @@ jobs:
                     # Распаковываем tar.gz
                     tar -xzf "$tarball" -C "$target_dir" --strip-components=1
                     
+                    # Проверяем содержимое распакованной директории
+                    echo "Contents of $target_dir after extraction:"
+                    ls -R "$target_dir"
+                    
                     # Перемещаем addon_iec61850.node из Release в корень target_dir
                     if [ -f "$target_dir/Release/addon_iec61850.node" ]; then                
                       mv "$target_dir/Release/addon_iec61850.node" "$target_dir/"
@@ -331,11 +335,11 @@ jobs:
                     echo "Skipping unknown platform/arch: $platform_arch"
                   fi
                 else
-                  echo "No tar.gz files found in $artifact_dir/prebuilds/@amigo9090"
+                  echo "No tar.gz files found in $artifact_dir"
                 fi
               done
             else
-              echo "Directory $artifact_dir/prebuilds/@amigo9090 does not exist"
+              echo "Directory $artifact_dir does not exist"
             fi
           done
 
