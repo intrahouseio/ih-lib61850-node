@@ -21,7 +21,7 @@ jobs:
 
       - name: Get package version
         id: package-version
-        run: echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
+        run: echo "version=$(node -p \"require('./package.json').version\")" >> $GITHUB_OUTPUT
         shell: bash
 
       - name: Delete existing release
@@ -127,6 +127,13 @@ jobs:
         run: npm run configure
         shell: pwsh
 
+      - name: Copy iec61850.dll for Windows
+        if: matrix.os == 'windows-latest'
+        run: |
+          New-Item -ItemType Directory -Force -Path build/Release
+          Copy-Item -Path lib/build/iec61850.dll -Destination build/Release/
+        shell: pwsh
+
       - name: Determine output directory (Unix)
         if: matrix.os != 'windows-latest'
         id: set-output-dir-unix
@@ -195,7 +202,7 @@ jobs:
 
       - name: Get package version
         id: package-version
-        run: echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
+        run: echo "version=$(node -p \"require('./package.json').version\")" >> $GITHUB_OUTPUT
         shell: bash
 
       - name: Get prebuild file
@@ -236,7 +243,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: addon_iec61850-${{ matrix.os }}-${{ matrix.arch }}
-          path: ${{ steps.get-prebuild.outputs.file }}
+          path: |
+            ${{ steps.get-prebuild.outputs.file }}
+            build/Release/iec61850.dll
 
   update-builds-and-publish:
     needs: build-and-upload
@@ -266,7 +275,7 @@ jobs:
 
       - name: Get package version
         id: package-version
-        run: echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
+        run: echo "version=$(node -p \"require('./package.json').version\")" >> $GITHUB_OUTPUT
         shell: bash
 
       - name: Download all artifacts
@@ -279,11 +288,11 @@ jobs:
 
       - name: Update builds folder
         run: |
-          # Очищаем папку builds, если она существует
+          # Clear builds folder if it exists
           rm -rf builds
           mkdir -p builds
 
-          # Карта соответствий для именования папок
+          # Map for platform naming
           declare -A platform_map=(
             ["linux-arm"]="linux_arm"
             ["linux-arm64"]="linux_arm64"
@@ -293,38 +302,38 @@ jobs:
             ["win32-x64"]="windows_x64"
           )
 
-          # Выводим структуру артефактов для отладки
+          # Debug artifact structure
           echo "Artifact structure:"
           find artifacts -type f
 
-          # Перебираем все скачанные артефакты
+          # Process all downloaded artifacts
           for artifact_dir in artifacts/addon_iec61850-*; do
             echo "Processing artifact directory: $artifact_dir"
             if [ -d "$artifact_dir" ]; then
               for tarball in "$artifact_dir"/*.tar.gz; do
                 if [ -f "$tarball" ]; then
                   echo "Processing tarball: $tarball"
-                  # Извлекаем имя файла
+                  # Extract filename
                   filename=$(basename "$tarball")
                   echo "Filename: $filename"
-                  # Извлекаем платформу и архитектуру из имени файла
+                  # Extract platform and architecture from filename
                   platform_arch=$(echo "$filename" | sed -n 's/ih-libiec61850-node-v[0-9.]*-\(node-v[0-9]*\|napi\)-\(.*\)\.tar\.gz/\2/p')
                   echo "Extracted platform_arch: $platform_arch"
                   
-                  # Проверяем, есть ли соответствие в карте
+                  # Check if platform/arch is in the map
                   if [[ -n "${platform_map[$platform_arch]}" ]]; then
                     target_dir="builds/${platform_map[$platform_arch]}"
                     echo "Target directory: $target_dir"
                     mkdir -p "$target_dir"
                     
-                    # Распаковываем tar.gz
+                    # Extract tar.gz
                     tar -xzf "$tarball" -C "$target_dir" --strip-components=1
                     
-                    # Проверяем содержимое распакованной директории
+                    # Debug contents of target_dir
                     echo "Contents of $target_dir after extraction:"
                     ls -R "$target_dir"
                     
-                    # Перемещаем addon_iec61850.node из Release в корень target_dir
+                    # Move addon_iec61850.node from Release to target_dir root
                     if [ -f "$target_dir/Release/addon_iec61850.node" ]; then                
                       mv "$target_dir/Release/addon_iec61850.node" "$target_dir/"
                       rm -rf "$target_dir/Release"
@@ -338,12 +347,25 @@ jobs:
                   echo "No tar.gz files found in $artifact_dir"
                 fi
               done
+              
+              # Copy iec61850.dll for Windows
+              if [[ "$artifact_dir" == *"windows-latest-x64"* ]]; then
+                target_dir="builds/windows_x64"
+                mkdir -p "$target_dir"
+                if [ -f "$artifact_dir/iec61850.dll" ]; then
+                  echo "Copying iec61850.dll to $target_dir"
+                  cp "$artifact_dir/iec61850.dll" "$target_dir/"
+                else
+                  echo "Error: iec61850.dll not found in $artifact_dir"
+                  exit 1
+                fi
+              fi
             else
               echo "Directory $artifact_dir does not exist"
             fi
           done
 
-          # Проверяем содержимое папки builds
+          # Debug builds folder contents
           echo "Builds folder contents:"
           ls -R builds
         shell: bash
@@ -356,6 +378,11 @@ jobs:
               exit 1
             fi
           done
+          # Verify iec61850.dll for Windows
+          if [ ! -f "builds/windows_x64/iec61850.dll" ]; then
+            echo "Missing iec61850.dll in builds/windows_x64"
+            exit 1
+          fi
         shell: bash
 
       - name: Check if version is unique
@@ -371,14 +398,14 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          # Настраиваем Git для коммитов
+          # Configure Git for commits
           git config --global user.name "GitHub Actions"
           git config --global user.email "actions@github.com"
           
-          # Создаем временную копию package.json без scripts и devDependencies
+          # Create a temporary package.json without scripts and devDependencies
           jq 'del(.scripts) | del(.devDependencies)' package.json > package_npm.json
           
-          # Проверяем наличие изменений в builds/
+          # Check for changes in builds/
           if git status --porcelain builds/ | grep .; then
             git add builds/
             git commit -m "Update builds for release"
@@ -386,15 +413,15 @@ jobs:
             echo "No changes to commit in builds/"
           fi
           
-          # Обновляем версию в оригинальном package.json
+          # Update version in original package.json
           npm version patch -m "Release %s with updated builds"
           
-          # Заменяем package.json на версию без scripts и devDependencies
+          # Replace package.json with version without scripts and devDependencies
           mv package_npm.json package.json
-          # Публикуем в npm
+          # Publish to npm
           npm publish --access public
           
-          # Восстанавливаем оригинальный package.json
+          # Restore original package.json
           git checkout -- package.json
 
       - name: Push changes
