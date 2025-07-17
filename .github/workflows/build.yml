@@ -367,7 +367,7 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          # Настраиваем Git для коммитов
+          # Настраиваем Git для коммитов 2
           git config --global user.name "GitHub Actions"
           git config --global user.email "actions@github.com"
           
