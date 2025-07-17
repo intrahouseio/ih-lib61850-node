@@ -10,15 +10,7 @@
         "src/addon.cc",
         "src/mms_client.cc",
         "src/goose_subscriber.cc"
-      ],
-      "actions": [
-        {
-          "action_name": "print_variable",
-          "inputs": [],
-          "outputs": ["print_output"],
-          "action": ["echo", "openssl_fips: $(openssl_fips)"]
-        }
-      ],
+      ],      
       "include_dirs": [
         "<!@(node -p \"require('node-addon-api').include\")",
         "include/libiec61850",               
