@@ -80,7 +80,7 @@
             "<(module_root_dir)/lib/build/hal.lib",
             "<(module_root_dir)/third_party/mbedtls/library/Release/mbedcrypto.lib",
             "<(module_root_dir)/third_party/mbedtls/library/Release/mbedx509.lib",
-            "<(module_root_dir)/third_party/mbedtls/library/Release/mbedtls.lib"
+            "<(module_root_dir)/third_party/mbedtls/library/Release/mbedtls.lib",
             "<(module_root_dir)/third_party/winpcap/Lib/x64/wpcap.lib",
             "<(module_root_dir)/third_party/winpcap/Lib/x64/Packet.lib",
             "ws2_32.lib",
