@@ -13,7 +13,7 @@
       ],      
       "include_dirs": [
         "<!@(node -p \"require('node-addon-api').include\")",
-        "(module_root_dir)/include/libiec61850",               
+        "include/libiec61850",               
         "src",        
       ],
       "defines": ["NAPI_DISABLE_CPP_EXCEPTIONS"],
