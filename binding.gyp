@@ -21,11 +21,10 @@
       ],
       "include_dirs": [
         "<!@(node -p \"require('node-addon-api').include\")",
-        "include/libiec61850", 
-        "include/pugixml",        
+        "include/libiec61850",               
         "src",        
       ],
-      "defines": ["NAPI_CPP_EXCEPTIONS"],
+      "defines": ["NAPI_DISABLE_CPP_EXCEPTIONS"],
       "cflags": ["-Wall", "-Wno-unused-parameter"],
       "cflags_cc": ["-Wall", "-Wno-unused-parameter", "-std=c++17", "-fexceptions"],
       "conditions": [
@@ -86,10 +85,17 @@
           },
           "libraries": [
             "<(module_root_dir)/lib/build/libiec61850-windows-latest-x64.lib",
-            "-lws2_32.lib",
-            "-liphlpapi.lib",
-            "-lbcrypt.lib",
-            "-lmsvcrt.lib"
+            "<(module_root_dir)/lib/build/hal.lib",
+            "<(module_root_dir)/third_party/mbedtls-2.28/library/Release/mbedcrypto.lib",
+            "<(module_root_dir)/third_party/mbedtls-2.28/library/Release/mbedx509.lib",
+            "<(module_root_dir)/third_party/mbedtls-2.28/library/Release/mbedtls.lib"
+            "<(module_root_dir)/third_party/winpcap/Lib/x64/wpcap.lib",
+            "<(module_root_dir)/third_party/winpcap/Lib/x64/Packet.lib",
+            "ws2_32.lib",
+            "iphlpapi.lib",
+            "bcrypt.lib",
+            "msvcrt.lib",
+            "advapi32.lib"
           ]
         }]
       ]

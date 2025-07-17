@@ -1,5 +1,3 @@
-name: Build Native Addon
-
 on:
   push:
     branches: [main]
@@ -21,7 +19,7 @@ jobs:
 
       - name: Get package version
         id: package-version
-        run: echo "version=$(node -p \"require('./package.json').version\")" >> $GITHUB_OUTPUT
+        run: echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
         shell: bash
 
       - name: Delete existing release
@@ -202,7 +200,7 @@ jobs:
 
       - name: Get package version
         id: package-version
-        run: echo "version=$(node -p \"require('./package.json').version\")" >> $GITHUB_OUTPUT
+        run: echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
         shell: bash
 
       - name: Get prebuild file
@@ -243,9 +241,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: addon_iec61850-${{ matrix.os }}-${{ matrix.arch }}
-          path: |
-            ${{ steps.get-prebuild.outputs.file }}
-            build/Release/iec61850.dll
+          path: ${{ steps.get-prebuild.outputs.file }}
 
   update-builds-and-publish:
     needs: build-and-upload
@@ -275,7 +271,7 @@ jobs:
 
       - name: Get package version
         id: package-version
-        run: echo "version=$(node -p \"require('./package.json').version\")" >> $GITHUB_OUTPUT
+        run: echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
         shell: bash
 
       - name: Download all artifacts
@@ -288,11 +284,11 @@ jobs:
 
       - name: Update builds folder
         run: |
-          # Clear builds folder if it exists
+          # Очищаем папку builds, если она существует
           rm -rf builds
           mkdir -p builds
 
-          # Map for platform naming
+          # Карта соответствий для именования папок
           declare -A platform_map=(
             ["linux-arm"]="linux_arm"
             ["linux-arm64"]="linux_arm64"
@@ -302,38 +298,38 @@ jobs:
             ["win32-x64"]="windows_x64"
           )
 
-          # Debug artifact structure
+          # Выводим структуру артефактов для отладки
           echo "Artifact structure:"
           find artifacts -type f
 
-          # Process all downloaded artifacts
+          # Перебираем все скачанные артефакты
           for artifact_dir in artifacts/addon_iec61850-*; do
             echo "Processing artifact directory: $artifact_dir"
             if [ -d "$artifact_dir" ]; then
               for tarball in "$artifact_dir"/*.tar.gz; do
                 if [ -f "$tarball" ]; then
                   echo "Processing tarball: $tarball"
-                  # Extract filename
+                  # Извлекаем имя файла
                   filename=$(basename "$tarball")
                   echo "Filename: $filename"
-                  # Extract platform and architecture from filename
+                  # Извлекаем платформу и архитектуру из имени файла
                   platform_arch=$(echo "$filename" | sed -n 's/ih-libiec61850-node-v[0-9.]*-\(node-v[0-9]*\|napi\)-\(.*\)\.tar\.gz/\2/p')
                   echo "Extracted platform_arch: $platform_arch"
                   
-                  # Check if platform/arch is in the map
+                  # Проверяем, есть ли соответствие в карте
                   if [[ -n "${platform_map[$platform_arch]}" ]]; then
                     target_dir="builds/${platform_map[$platform_arch]}"
                     echo "Target directory: $target_dir"
                     mkdir -p "$target_dir"
                     
-                    # Extract tar.gz
+                    # Распаковываем tar.gz
                     tar -xzf "$tarball" -C "$target_dir" --strip-components=1
                     
-                    # Debug contents of target_dir
+                    # Проверяем содержимое распакованной директории
                     echo "Contents of $target_dir after extraction:"
                     ls -R "$target_dir"
                     
-                    # Move addon_iec61850.node from Release to target_dir root
+                    # Перемещаем addon_iec61850.node из Release в корень target_dir
                     if [ -f "$target_dir/Release/addon_iec61850.node" ]; then                
                       mv "$target_dir/Release/addon_iec61850.node" "$target_dir/"
                       rm -rf "$target_dir/Release"
@@ -347,25 +343,12 @@ jobs:
                   echo "No tar.gz files found in $artifact_dir"
                 fi
               done
-              
-              # Copy iec61850.dll for Windows
-              if [[ "$artifact_dir" == *"windows-latest-x64"* ]]; then
-                target_dir="builds/windows_x64"
-                mkdir -p "$target_dir"
-                if [ -f "$artifact_dir/iec61850.dll" ]; then
-                  echo "Copying iec61850.dll to $target_dir"
-                  cp "$artifact_dir/iec61850.dll" "$target_dir/"
-                else
-                  echo "Error: iec61850.dll not found in $artifact_dir"
-                  exit 1
-                fi
-              fi
             else
               echo "Directory $artifact_dir does not exist"
             fi
           done
 
-          # Debug builds folder contents
+          # Проверяем содержимое папки builds
           echo "Builds folder contents:"
           ls -R builds
         shell: bash
@@ -378,11 +361,6 @@ jobs:
               exit 1
             fi
           done
-          # Verify iec61850.dll for Windows
-          if [ ! -f "builds/windows_x64/iec61850.dll" ]; then
-            echo "Missing iec61850.dll in builds/windows_x64"
-            exit 1
-          fi
         shell: bash
 
       - name: Check if version is unique
@@ -398,14 +376,14 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          # Configure Git for commits
+          # Настраиваем Git для коммитов
           git config --global user.name "GitHub Actions"
           git config --global user.email "actions@github.com"
           
-          # Create a temporary package.json without scripts and devDependencies
+          # Создаем временную копию package.json без scripts и devDependencies
           jq 'del(.scripts) | del(.devDependencies)' package.json > package_npm.json
           
-          # Check for changes in builds/
+          # Проверяем наличие изменений в builds/
           if git status --porcelain builds/ | grep .; then
             git add builds/
             git commit -m "Update builds for release"
@@ -413,15 +391,15 @@ jobs:
             echo "No changes to commit in builds/"
           fi
           
-          # Update version in original package.json
+          # Обновляем версию в оригинальном package.json
           npm version patch -m "Release %s with updated builds"
           
-          # Replace package.json with version without scripts and devDependencies
+          # Заменяем package.json на версию без scripts и devDependencies
           mv package_npm.json package.json
-          # Publish to npm
+          # Публикуем в npm
           npm publish --access public
           
-          # Restore original package.json
+          # Восстанавливаем оригинальный package.json
           git checkout -- package.json
 
       - name: Push changes
