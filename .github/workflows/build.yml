@@ -367,6 +367,18 @@ jobs:
           done
         shell: bash
 
+      - name: Commit builds folder changes
+        run: |
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "actions@github.com"
+          if git status --porcelain builds/ | grep .; then
+            git add builds/
+            git commit -m "Update builds for release preparation"
+          else
+            echo "No changes to commit in builds/"
+          fi
+        shell: bash
+
       - name: Sync with origin/main
         run: |
           git fetch origin
