@@ -13,7 +13,7 @@
       ],      
       "include_dirs": [
         "<!@(node -p \"require('node-addon-api').include\")",
-        "lib/src/libiec61850",               
+        "include,               
         "src",        
       ],
       "defines": ["NAPI_DISABLE_CPP_EXCEPTIONS"],
