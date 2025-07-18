@@ -259,6 +259,10 @@ jobs:
           node-version: '20.19.0'
           registry-url: 'https://registry.npmjs.org'
 
+      - name: Install semver
+        run: npm install -g semver
+        shell: bash
+
       - name: Debug npm config
         run: npm config list
         env:
@@ -363,30 +367,38 @@ jobs:
           done
         shell: bash
 
+      - name: Sync with origin/main
+        run: |
+          git fetch origin
+          git rebase origin/main || {
+            echo "Rebase failed, attempting to resolve conflicts..."
+            git rebase --abort
+            git merge origin/main -m "Merge origin/main to resolve divergence"
+            git push origin main
+          }
+        shell: bash
+
       - name: Publish to npm
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          # Настраиваем Git для коммитов 2
+          # Настраиваем Git для коммитов
           git config --global user.name "GitHub Actions"
           git config --global user.email "actions@github.com"
           
-          # Получаем текущую версию из package.json
-          VERSION=$(node -p "require('./package.json').version")
+          # Получаем последнюю версию пакета из npm
+          LATEST_VERSION=$(npm view @amigo9090/ih-libiec61850-node version || echo "0.0.0")
+          echo "Latest version in npm: $LATEST_VERSION"
           
-          # Проверяем, существует ли текущая версия в npm
-          if npm view @amigo9090/ih-libiec61850-node@$VERSION version > /dev/null 2>&1; then
-            echo "Version $VERSION already exists in npm, incrementing version..."
-            # Увеличиваем версию (patch) и создаем новый коммит
-            NEW_VERSION=$(npm version patch --no-git-tag-version)
-            echo "New version: $NEW_VERSION"
-            git add package.json package-lock.json
-            git commit -m "Bump version to $NEW_VERSION for release"
-            git push origin main
-          else
-            echo "Version $VERSION is unique, proceeding with current version"
-            NEW_VERSION=$VERSION
-          fi
+          # Увеличиваем версию на основе последней версии в npm
+          NEW_VERSION=$(npx semver -i patch $LATEST_VERSION)
+          echo "New version to be set: $NEW_VERSION"
+          
+          # Обновляем версию в package.json
+          npm version $NEW_VERSION --no-git-tag-version
+          git add package.json package-lock.json
+          git commit -m "Bump version to $NEW_VERSION for release"
+          git push origin main
           
           # Создаем временную копию package.json без scripts и devDependencies
           jq 'del(.scripts) | del(.devDependencies)' package.json > package_npm.json
