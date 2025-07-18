@@ -130,6 +130,10 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path build/Release
           Copy-Item -Path lib/build/iec61850.dll -Destination build/Release/
+          if (-not (Test-Path build/Release/iec61850.dll)) {
+            Write-Error "Failed to copy iec61850.dll to build/Release/"
+            exit 1
+          }
         shell: pwsh
 
       - name: Determine output directory (Unix)
@@ -242,6 +246,7 @@ jobs:
         with:
           name: addon_iec61850-${{ matrix.os }}-${{ matrix.arch }}
           path: ${{ steps.get-prebuild.outputs.file }}
+          build/Release/iec61850.dll
 
   update-builds-and-publish:
     needs: build-and-upload
@@ -287,6 +292,82 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y jq
 
       - name: Update builds folder
+        run: |
+          # Очищаем папку builds, если она существует
+          rm -rf builds
+          mkdir -p builds
+
+          # Карта соответствий для именования папок
+          declare -A platform_map=(
+            ["linux-arm"]="linux_arm"
+            ["linux-arm64"]="linux_arm64"
+            ["linux-x64"]="linux_x64"
+            ["darwin-arm64"]="macos_arm64"
+            ["darwin-x64"]="macos_x64"
+            ["win32-x64"]="windows_x64"
+          )
+
+          # Выводим структуру артефактов для отладки
+          echo "Artifact structure:"
+          find artifacts -type f
+
+          # Перебираем все скачанные артефакты
+          for artifact_dir in artifacts/addon_iec61850-*; do
+            echo "Processing artifact directory: $artifact_dir"
+            if [ -d "$artifact_dir" ]; then
+              for tarball in "$artifact_dir"/*.tar.gz; do
+                if [ -f "$tarball" ]; then
+                  echo "Processing tarball: $tarball"
+                  # Извлекаем имя файла
+                  filename=$(basename "$tarball")
+                  echo "Filename: $filename"
+                  # Извлекаем платформу и архитектуру из имени файла
+                  platform_arch=$(echo "$filename" | sed -n 's/ih-libiec61850-node-v[0-9.]*-\(node-v[0-9]*\|napi\)-\(.*\)\.tar\.gz/\2/p')
+                  echo "Extracted platform_arch: $platform_arch"
+                  
+                  # Проверяем, есть ли соответствие в карте
+                  if [[ -n "${platform_map[$platform_arch]}" ]]; then
+                    target_dir="builds/${platform_map[$platform_arch]}"
+                    echo "Target directory: $target_dir"
+                    mkdir -p "$target_dir"
+                    
+                    # Распаковываем tar.gz
+                    tar -xzf "$tarball" -C "$target_dir" --strip-components=1
+                    
+                    # Проверяем содержимое распакованной директории
+                    echo "Contents of $target_dir after extraction:"
+                    ls -R "$target_dir"
+                    
+                    # Перемещаем addon_iec61850.node из Release в корень target_dir
+                    if [ -f "$target_dir/Release/addon_iec61850.node" ]; then                
+                      mv "$target_dir/Release/addon_iec61850.node" "$target_dir/"
+                      rm -rf "$target_dir/Release"
+                    else
+                      mv "$target_dir/addon.node" "$target_dir/addon_iec61850.node" 2>/dev/null || true
+                    fi
+                  else
+                    echo "Skipping unknown platform/arch: $platform_arch"
+                  fi
+                else
+                  echo "No tar.gz files found in $artifact_dir"
+                fi
+              done
+              # Копируем iec61850.dll для Windows
+              if [ -f "$artifact_dir/iec61850.dll" ]; then
+                mkdir -p "builds/windows_x64"
+                cp "$artifact_dir/iec61850.dll" "builds/windows_x64/"
+                echo "Copied iec61850.dll to builds/windows_x64/"
+              fi
+            else
+              echo "Directory $artifact_dir does not exist"
+            fi
+          done
+
+          # Проверяем содержимое папки builds
+          echo "Builds folder contents:"
+          ls -R builds
+        shell: bash
+
         run: |
           # Очищаем папку builds, если она существует
           rm -rf builds
