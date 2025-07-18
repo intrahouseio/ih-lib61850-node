@@ -1,17 +1,19 @@
-# ih-lib60870-node
+# ih-lib61850-node
 
-A cross-platform Node.js native addon for the **IEC 60870-5 protocol suite**, enabling seamless communication with industrial control systems, SCADA, and RTUs. Built with `node-gyp` and `prebuild`, this addon ensures compatibility across multiple operating systems and architectures.
+A cross-platform Node.js native addon for the **IEC 61850 protocol**, enabling seamless communication with substation automation systems. Built with `node-gyp` and `prebuild`, this addon ensures compatibility across multiple operating systems and architectures.
 
 ---
 
 ## ✨ Features
 
-- **IEC 60870-5 Protocol Support**: Implements key functionalities of IEC 60870-5 standards (e.g., IEC 60870-5-101/104) for robust industrial automation communication.
+- **IEC 61850 Protocol Support**: Implements key functionalities of the IEC 61850 standard for substation automation, including GOOSE (Generic Object Oriented Substation Events) and MMS (Manufacturing Message Specification).
 - **Cross-Platform Compatibility**: Supports Windows, Linux, and macOS with prebuilt binaries for x64, arm, and arm64 architectures.
 - **High Performance**: Native C++ implementation optimized for low-latency and reliable data exchange.
-- **File Transfer**: Supports file transfer operations in both monitoring and control directions.
+- **GOOSE and MMS Support**: Real-time GOOSE message handling and client-server interaction via MMS.
+- **File Transfer**: Supports file transfer operations as per IEC 61850 standards.
 - **Flexible Integration**: Easy-to-use APIs for integration with Node.js applications, SCADA systems, or custom control solutions.
 - **Prebuilt Binaries**: Includes precompiled binaries for Node.js v20, simplifying setup and deployment.
+- **Windows DLL Support**: Includes `iec61850.dll` for Windows, automatically placed alongside `addon_iec61850.node` for ease of use.
 
 ---
 
@@ -31,7 +33,7 @@ A cross-platform Node.js native addon for the **IEC 60870-5 protocol suite**, en
 2. Install the package via npm:
 
    ```bash
-   npm install ih-lib60870-node
+   npm install @amigo9090/ih-libiec61850-node
    ```
 
 3. Prebuilt binaries will be automatically downloaded for your platform and architecture. If a prebuilt binary is unavailable, the addon will be compiled using `node-gyp`, requiring:
@@ -40,81 +42,44 @@ A cross-platform Node.js native addon for the **IEC 60870-5 protocol suite**, en
      - `gcc` on Linux
      - `MSVC` on Windows
      - `clang` on macOS
+4. For Windows: The `iec61850.dll` file is automatically included in the `builds/windows_x64/` directory alongside `addon_iec61850.node`.
 
 ---
 
 ## 📖 Usage
 
-Below is an example of using `ih-lib60870-node` to establish an IEC 60870-5-104 connection and handle data:
+Below is an example of using `ih-lib61850-node` to establish an IEC 61850 connection and handle GOOSE and MMS messages:
 
 ```javascript
-const { IEC104Client } = require('ih-lib60870-node');
-const util = require('util');
-const fs = require('fs');
+const { IEC61850Client } = require('@amigo9090/ih-libiec61850-node');
 
-// Initialize an IEC 60870-5-104 client
-const client = new IEC104Client((event, data) => {
-    if (data.event === 'opened') client.sendStartDT();
-    console.log(`Server 1 Event: ${event}, Data: ${util.inspect(data)}`);
-    if (data.event === 'activated') client.sendCommands([
-        { typeId: 100, ioa: 0, asdu: 1, value: 20 },          // Interrogation command
-        { typeId: 45, ioa: 145, value: true, asdu: 1, bselCmd: true, ql: 1 },  // C_SC_NA_1: On
-        { typeId: 46, ioa: 4000, value: 1, asdu: 1, bselCmd: 1, ql: 2 },      // C_DC_NA_1: Off
-        { typeId: 47, ioa: 147, value: 1, asdu: 1, bselCmd: 1, ql: 0 },       // C_RC_NA_1: Increase
-        { typeId: 48, ioa: 148, value: 0.001, asdu: 1, selCmd: 1, ql: 0 },    // C_SE_NA_1: Normalized setpoint
-        { typeId: 49, ioa: 149, value: 5000, asdu: 1, bselCmd: 1, ql: 0 },    // C_SE_NB_1: Scaled setpoint
-        { typeId: 50, ioa: 150, value: 123.45, asdu: 1 },                     // C_SE_NC_1: Floating point setpoint
-    ]);
+// Initialize an IEC 61850 client
+const client = new IEC61850Client({
+    host: '192.168.0.1',
+    port: 102,
+    // Additional configuration parameters
 });
 
-const client2 = new IEC104Client((event, data) => {
-    if (data.event === 'opened') client2.sendStartDT();
-    console.log(`Server 2 Event: ${event}, Data: ${util.inspect(data)}`);
+// Connect to the server
+client.connect();
+
+// Subscribe to GOOSE messages
+client.subscribeGOOSE('domain', 'gooseId', (message) => {
+    console.log('Received GOOSE message:', message);
 });
 
-async function main() {
-    const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+// Send an MMS request
+client.sendMMSRequest('domain', 'itemId', (response) => {
+    console.log('MMS response:', response);
+});
 
-    client.connect({
-        ip: "192.168.0.1",
-        port: 2404,
-        clientID: "client1",
-        ipReserve: "192.168.0.2",
-        reconnectDelay: 2,           // Reconnection delay in seconds
-        originatorAddress: 0,
-        asduAddress: 1,
-        k: 12,
-        w: 8,
-        t0: 30,
-        t1: 15,
-        t2: 10,
-        t3: 20,
-        maxRetries: 5
-    });
-
-    client2.connect({
-        ip: "192.168.0.10",
-        port: 2404,
-        clientID: "client2",
-        originatorAddress: 1,
-        k: 12,
-        w: 8,
-        t0: 30,
-        t1: 15,
-        t2: 10,
-        t3: 20,
-        reconnectDelay: 2,
-        maxRetries: 5
-    });
-
-    // Wait for synchronization (optional)
-    await sleep(1000);
-}
-
-main();
+// Handle events
+client.on('event', (event) => {
+    console.log('Event:', event);
+});
 ```
 
-📚 **Additional Examples**: Examples for each supported protocol (e.g., IEC 60870-5-101, IEC 60870-5-104) are available in the [`examples/` directory](examples/). These demonstrate various configurations and use cases for industrial automation.
+📚 **Additional Examples**: Examples for all supported functionalities are available in the [`examples/` directory](https://github.com/intrahouseio/ih-lib61850-node/tree/main/examples). These demonstrate various configurations and use cases for substation automation.
 
 ---
 
@@ -125,8 +90,8 @@ To build the addon from source:
 1. Clone the repository:
 
    ```bash
-   git clone https://github.com/intrahouseio/ih-lib60870-node.git
-   cd ih-lib60870-node
+   git clone https://github.com/intrahouseio/ih-lib61850-node.git
+   cd ih-lib61850-node
    ```
 
 2. Install dependencies:
@@ -162,10 +127,10 @@ Contributions are welcome! To contribute:
 
 ## 📜 License
 
-This project is licensed under the [MIT License](LICENSE).
+This project is licensed under the [MIT License](https://github.com/intrahouseio/ih-lib61850-node/blob/main/LICENSE).
 
 ---
 
 ## 💬 Support
 
-For issues, questions, or feature requests, please open an issue on the [GitHub repository](https://github.com/intrahouseio/ih-lib60870-node/issues).
+For issues, questions, or feature requests, please open an issue on the [GitHub repository](https://github.com/intrahouseio/ih-lib61850-node/issues).
