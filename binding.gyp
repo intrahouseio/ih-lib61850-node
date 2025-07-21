@@ -13,7 +13,7 @@
       ],      
       "include_dirs": [
         "<!@(node -p \"require('node-addon-api').include\")",
-        "include,               
+        "include",               
         "src",        
       ],
       "defines": ["NAPI_DISABLE_CPP_EXCEPTIONS"],
