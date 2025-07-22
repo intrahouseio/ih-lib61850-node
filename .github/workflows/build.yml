@@ -129,14 +129,7 @@ jobs:
       - name: Configure build for Windows
         if: matrix.os == 'windows-latest'
         run: npm run configure
-        shell: pwsh
-
-      - name: Copy iec61850.dll for Windows
-        if: matrix.os == 'windows-latest'
-        run: |
-          New-Item -ItemType Directory -Force -Path build/Release
-          Copy-Item -Path lib/build/iec61850.dll -Destination build/Release/
-        shell: pwsh
+        shell: pwsh      
 
       - name: Determine output directory (Unix)
         if: matrix.os != 'windows-latest'
