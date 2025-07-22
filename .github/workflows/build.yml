@@ -194,27 +194,21 @@ jobs:
       - name: Prebuild binaries for Node.js 20 (Windows)
         if: matrix.os == 'windows-latest'
         run: |
-          npm run prebuild -- --arch x64 --include "lib\build\iec61850.dll"
-        shell: pwsh
-
-      - name: Copy Windows DLL for packaging
-        if: matrix.os == 'windows-latest'
-        run: |
+          npm run prebuild -- --arch x64
+          $prebuildDir = "prebuilds\@amigo9090\ih-libiec61850-node-v${{ steps.package-version.outputs.version }}-node-v${{ matrix.node_version }}-win32-x64"
+          $tarFile = "$prebuildDir.tar.gz"
           $dllPath = "lib\build\iec61850.dll"
-          $targetDir = "prebuilds\@amigo9090\ih-libiec61850-node-v${{ steps.package-version.outputs.version }}-node-v${{ matrix.node_version }}-win32-x64"
           
           if (Test-Path $dllPath) {
-            New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
-            Copy-Item -Path $dllPath -Destination $targetDir
-            Write-Host "Copied iec61850.dll to $targetDir"
-            dir $targetDir
+            Write-Host "Adding iec61850.dll to $tarFile"
+            tar -rf $tarFile -C (Split-Path $dllPath) (Split-Path $dllPath -Leaf)
           } else {
             Write-Host "::error::DLL not found at $dllPath"
             exit 1
           }
         shell: pwsh
         env:
-          node_version: ${{ '20' }} 
+          node_version: ${{ '20' }}
 
       - name: Get package version
         id: package-version
