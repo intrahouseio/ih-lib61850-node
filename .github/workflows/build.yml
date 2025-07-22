@@ -262,7 +262,7 @@ jobs:
           }
           
           Write-Host "Windows artifacts verified:"
-          Get-ChildItem -Path lib\build\Release
+          Get-ChildItem -Path lib\build
         shell: pwsh
 
       - name: Upload prebuilt binaries to GitHub Releases
