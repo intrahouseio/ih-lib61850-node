@@ -80,6 +80,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -89,114 +91,24 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.x'
 
       - name: Install Python dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install setuptools
+        run: python -m pip install --upgrade pip setuptools
+        shell: bash
 
-      - name: Install cross-compilers for Linux ARM
-        if: matrix.os == 'ubuntu-latest' && (matrix.arch == 'arm' || matrix.arch == 'arm64')
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf libc6-dev-armel-cross libc6-dev-armhf-cross          
-          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
-
-      - name: Install dependencies
+      - name: Install npm dependencies
         run: npm install
-
-      - name: Configure build for Unix
-        if: matrix.os != 'windows-latest'
-        run: |
-          if [ "${{ matrix.os }}" == "ubuntu-latest" ] && [ "${{ matrix.arch }}" == "arm" ]; then
-            export CC=arm-linux-gnueabihf-gcc
-            export CXX=arm-linux-gnueabihf-g++
-            export LINK=arm-linux-gnueabihf-g++
-            npm run configure -- --arch=arm
-          elif [ "${{ matrix.os }}" == "ubuntu-latest" ] && [ "${{ matrix.arch }}" == "arm64" ]; then
-            export CC=aarch64-linux-gnu-gcc
-            export CXX=aarch64-linux-gnu-g++
-            export LINK=aarch64-linux-gnu-g++
-            npm run configure -- --arch=arm64
-          elif [ "${{ matrix.arch }}" != "x64" ]; then
-            npm run configure -- --arch=${{ matrix.arch }}
-          else
-            npm run configure
-          fi
         shell: bash
 
-      - name: Configure build for Windows
-        if: matrix.os == 'windows-latest'
+      - name: Configure node-gyp
         run: npm run configure
-        shell: pwsh
+        shell: bash
 
-      - name: Copy iec61850.dll for Windows
+      - name: Create builds directory for Windows
         if: matrix.os == 'windows-latest'
-        run: |
-          New-Item -ItemType Directory -Force -Path builds/windows_x64
-          Copy-Item -Path lib/build/iec61850.dll -Destination builds/windows_x64
+        run: New-Item -ItemType Directory -Force -Path builds/windows_x64
         shell: pwsh
-
-      - name: Determine output directory (Unix)
-        if: matrix.os != 'windows-latest'
-        id: set-output-dir-unix
-        run: |
-          if [ "${{ matrix.os }}" == "macos-latest" ] && [ "${{ matrix.arch }}" == "x64" ]; then
-            echo "output_dir=macos_x64" >> $GITHUB_OUTPUT
-          elif [ "${{ matrix.os }}" == "macos-latest" ] && [ "${{ matrix.arch }}" == "arm64" ]; then
-            echo "output_dir=macos_arm64" >> $GITHUB_OUTPUT
-          elif [ "${{ matrix.os }}" == "ubuntu-latest" ] && [ "${{ matrix.arch }}" == "x64" ]; then
-            echo "output_dir=linux_x64" >> $GITHUB_OUTPUT
-          elif [ "${{ matrix.os }}" == "ubuntu-latest" ] && [ "${{ matrix.arch }}" == "arm64" ]; then
-            echo "output_dir=linux_arm64" >> $GITHUB_OUTPUT
-          elif [ "${{ matrix.os }}" == "ubuntu-latest" ] && [ "${{ matrix.arch }}" == "arm" ]; then
-            echo "output_dir=linux_arm" >> $GITHUB_OUTPUT
-          fi
-        shell: bash
-
-      - name: Determine output directory (Windows)
-        if: matrix.os == 'windows-latest'
-        id: set-output-dir-windows
-        run: |
-          if ("${{ matrix.arch }}" -eq "x64") {
-            echo "output_dir=windows_x64" >> $env:GITHUB_OUTPUT
-          }
-        shell: pwsh
-
-      - name: Check library format for ARM
-        if: matrix.os == 'ubuntu-latest' && matrix.arch == 'arm'
-        run: |
-          file lib/build/libiec61850-ubuntu-latest-arm.a
-          readelf -h lib/build/libiec61850-ubuntu-latest-arm.a || true
-        shell: bash
-
-      - name: Check library format for ARM64
-        if: matrix.os == 'ubuntu-latest' && matrix.arch == 'arm64'
-        run: |
-          file lib/build/libiec61850-ubuntu-latest-arm64.a
-          readelf -h lib/build/libiec61850-ubuntu-latest-arm64.a || true
-        shell: bash
-
-      - name: Prebuild binaries for Node.js 20
-        if: matrix.os != 'windows-latest'
-        run: |
-          if [ "${{ matrix.os }}" == "macos-latest" ] && [ "${{ matrix.arch }}" == "x64" ]; then
-            arch -x86_64 npm run prebuild -- --target 20.19.0 --arch x64 --macos-min-version=11.0
-          elif [ "${{ matrix.os }}" == "ubuntu-latest" ] && [ "${{ matrix.arch }}" == "arm" ]; then
-            export CC=arm-linux-gnueabihf-gcc
-            export CXX=arm-linux-gnueabihf-g++
-            export LINK=arm-linux-gnueabihf-g++
-            npm run prebuild -- --target 20.19.0 --arch arm --cflags="-march=armv7-a -mfpu=vfp -mfloat-abi=hard"
-          elif [ "${{ matrix.os }}" == "ubuntu-latest" ] && [ "${{ matrix.arch }}" == "arm64" ]; then
-            export CC=aarch64-linux-gnu-gcc
-            export CXX=aarch64-linux-gnu-g++
-            export LINK=aarch64-linux-gnu-g++
-            npm run prebuild -- --target 20.19.0 --arch arm64
-          else
-            npm run prebuild -- --target 20.19.0 --arch ${{ matrix.arch }}
-          fi
-        shell: bash
 
       - name: Prebuild binaries for Node.js 20 (Windows)
         if: matrix.os == 'windows-latest'
@@ -213,6 +125,14 @@ jobs:
             tar -tzf (Get-ChildItem prebuilds/@amigo9090/*.tar.gz | Select-Object -First 1)
           } else {
             Write-Output "Файлы tar.gz не найдены в prebuilds/@amigo9090/"
+            dir prebuilds
+            exit 1
+          }
+          if (Test-Path builds/windows_x64/iec61850.dll) {
+            Write-Output "Найден iec61850.dll в builds/windows_x64/"
+            dir builds/windows_x64
+          } else {
+            Write-Output "Файл iec61850.dll не найден в builds/windows_x64/"
             exit 1
           }
         shell: pwsh
@@ -228,7 +148,7 @@ jobs:
           file=$(ls prebuilds/@amigo9090/ih-libiec61850-node-v${{ steps.package-version.outputs.version }}-*.tar.gz | head -n 1 || echo "")
           if [ -z "$file" ]; then
             echo "Файл tar.gz не найден в prebuilds/@amigo9090/"
-            ls -l prebuilds/@amigo9090/
+            ls -l prebuilds/@amigo9090/ || ls -l prebuilds/
             exit 1
           fi
           echo "file=$file" >> $GITHUB_OUTPUT
@@ -310,14 +230,36 @@ jobs:
         with:
           path: artifacts
 
-      - name: Install jq
-        run: sudo apt-get update && sudo apt-get install -y jq
-
       - name: Debug artifact contents
         run: |
-          echo "Содержимое директории artifacts:"
+          echo "Содержимое директории artifacts после скачивания:"
           ls -R artifacts
+          # Проверяем наличие артефакта для Windows
+          if [ -d "artifacts/addon_iec61850-windows-latest-x64" ]; then
+            echo "Содержимое artifacts/addon_iec61850-windows-latest-x64:"
+            ls -l artifacts/addon_iec61850-windows-latest-x64
+            # Проверяем наличие .tar.gz и iec61850.dll
+            if ls artifacts/addon_iec61850-windows-latest-x64/*.tar.gz >/dev/null 2>&1; then
+              echo "Найден .tar.gz в artifacts/addon_iec61850-windows-latest-x64"
+              for tarball in artifacts/addon_iec61850-windows-latest-x64/*.tar.gz; do
+                echo "Содержимое tarball $tarball:"
+                tar -tzf "$tarball"
+              done
+            else
+              echo "Файл .tar.gz не найден в artifacts/addon_iec61850-windows-latest-x64"
+            fi
+            if [ -f "artifacts/addon_iec61850-windows-latest-x64/iec61850.dll" ]; then
+              echo "Найден iec61850.dll в artifacts/addon_iec61850-windows-latest-x64"
+            else
+              echo "Файл iec61850.dll не найден в artifacts/addon_iec61850-windows-latest-x64"
+            fi
+          else
+            echo "Директория artifacts/addon_iec61850-windows-latest-x64 не существует"
+          fi
         shell: bash
+
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
 
       - name: Update builds folder
         run: |
@@ -348,20 +290,20 @@ jobs:
                     target_dir="builds/${platform_map[$platform_arch]}"
                     echo "Извлекаем в: $target_dir"
                     mkdir -p "$target_dir"
-                    # Извлекаем и проверяем содержимое
-                    tar -xzf "$tarball" -C "$target_dir" --strip-components=1
+                    # Извлекаем с учетом структуры build/Release/
+                    tar -xzf "$tarball" -C "$target_dir" --strip-components=2
                     echo "Содержимое $target_dir после извлечения:"
                     ls -l "$target_dir"
                     # Проверяем возможные имена .node файла
-                    if [ -f "$target_dir/Release/addon_iec61850.node" ]; then
+                    if [ -f "$target_dir/addon_iec61850.node" ]; then
+                      echo "Файл addon_iec61850.node уже на месте"
+                    elif [ -f "$target_dir/Release/addon_iec61850.node" ]; then
                       echo "Найден Release/addon_iec61850.node, перемещаем"
                       mv "$target_dir/Release/addon_iec61850.node" "$target_dir/"
                       rm -rf "$target_dir/Release"
                     elif [ -f "$target_dir/addon.node" ]; then
                       echo "Найден addon.node, переименовываем"
                       mv "$target_dir/addon.node" "$target_dir/addon_iec61850.node"
-                    elif [ -f "$target_dir/addon_iec61850.node" ]; then
-                      echo "Файл addon_iec61850.node уже на месте"
                     else
                       echo "Файл .node не найден в $target_dir. Проверяем содержимое tarball:"
                       tar -tzf "$tarball"
@@ -371,12 +313,16 @@ jobs:
                       find "$target_dir" -type f -name "*.node"
                       exit 1
                     fi
-                    # Копируем iec61850.dll, если он существует (для Windows)
-                    if [ -f "$artifact_dir/iec61850.dll" ]; then
-                      echo "Копируем iec61850.dll в $target_dir"
-                      cp "$artifact_dir/iec61850.dll" "$target_dir/"
-                    else
-                      echo "Файл iec61850.dll не найден в $artifact_dir"
+                    # Копируем iec61850.dll, если это Windows
+                    if [[ "${platform_map[$platform_arch]}" == "windows_x64" ]]; then
+                      if [ -f "$artifact_dir/iec61850.dll" ]; then
+                        echo "Копируем iec61850.dll в $target_dir"
+                        cp "$artifact_dir/iec61850.dll" "$target_dir/"
+                      else
+                        echo "Файл iec61850.dll не найден в $artifact_dir"
+                        ls -l "$artifact_dir"
+                        exit 1
+                      fi
                     fi
                   else
                     echo "Пропускаем неизвестную платформу/архитектуру: $platform_arch"
