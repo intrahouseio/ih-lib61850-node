@@ -110,6 +110,151 @@ jobs:
         run: New-Item -ItemType Directory -Force -Path builds/windows_x64
         shell: pwsh
 
+      - name: Ensure iec61850.dll exists
+        if: matrix.os == 'windows-latest'
+        run: |
+          if (-not (Test-Path builds/windows_x64/iec61850.dll)) {
+            Write-Output "Файл iec61850.dll не найден в builds/windows_x64/"
+            Copy-Item -Path "lib/build/iec61850.dll" -Destination "builds/windows_x64/iec61850.dll"
+            Write-Output "Ошибка: необходимо обеспечить наличие iec61850.dll"
+            exit 1
+          }
+          Write-Output "Найден iec61850.dll в builds/windows_x64/"
+          dir builds/windows_x64
+        shell: pwsh
+
+      - name: Prebuild binaries for Node.js 20 (Windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          npm run prebuild -- --target 20.19.0 --arch x64
+        shell: pwsh
+
+      - name: Debug prebuild output (Windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          dir prebuilds/@amigo9090
+          if (Test-Path prebuilds/@amigo9090/*.tar.gz) {
+            Write-Output "Содержимое tar.gz:"
+            tar -tzf (Get-ChildItem prebuilds/@amigo9090/*.tar.gz | Select-Object -First 1)
+          } else {
+            Write-Output "Файлы tar.gz не найдены в prebuilds/@amigo9090/"
+            dir prebuilds
+            exit 1
+          }
+          if (Test-Path builds/windows_x64/iec61850.dll) {
+            Write-Output "Найден iec61850.dll в builds/windows_x64/"
+            dir builds/windows_x64
+          } else {
+            Write-Output "Файл iec61850.dll не найден в builds/windows_x64/"
+            exit 1
+          }
+        shell: pwsh
+
+      - name: Get package version
+        id: package-version
+        run: echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
+        shell: bash
+
+      - name: Get prebuild file
+        id: get-prebuild
+        run: |
+          file=$(ls prebuilds/@amigo9090/ih-libiec61850-node-v${{ steps.package-version.outputs.version }}-*.tar.gz | head -n 1 || echo "")
+          if [ -z "$file" ]; then
+            echo "Файл tar.gz не найден в prebuilds/@amigo9090/"
+            ls -l prebuilds/@amigo9090/ || ls -l prebuilds/
+            exit 1
+          fi
+          echo "file=$file" >> $GITHUB_OUTPUT
+        shell: bash
+
+      - name: Determine platform for artifact name (Unix)
+        if: matrix.os != 'windows-latest'
+        id: determine-platform-unix
+        run: |
+          if [ "${{ matrix.os }}" == "ubuntu-latest" ]; then
+            echo "platform=linux" >> $GITHUB_OUTPUT
+          elif [ "${{ matrix.os }}" == "macos-latest" ]; then
+            echo "platform=darwin" >> $GITHUB_OUTPUT
+          fi
+        shell: bash
+
+      - name: Determine platform for artifact name (Windows)
+        if: matrix.os == 'windows-latest'
+        id: determine-platform-windows
+        run: |
+          if ("${{ matrix.os }}" -eq "windows-latest") {
+            echo "platform=win32" >> $env:GITHUB_OUTPUT
+          }
+        shell: pwsh
+
+      - name: Upload prebuilt binaries to GitHub Releases
+        uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        with:
+          tag_name: v${{ steps.package-version.outputs.version }}
+          files: ${{ steps.get-prebuild.outputs.file }}
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: addon_iec61850-${{ matrix.os }}-${{ matrix.arch }}
+          path: |
+            ${{ steps.get-prebuild.outputs.file }}
+            ${{ matrix.os == 'windows-latest' && 'builds/windows_x64/iec61850.dll' || '' }}
+    needs: create-release
+    runs-on: ${{ matrix.os }}
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    strategy:
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+          - macos-latest
+        arch:
+          - x64
+        include:
+          - os: macos-latest
+            arch: arm64
+          - os: ubuntu-latest
+            arch: arm64
+          - os: ubuntu-latest
+            arch: arm
+      fail-fast: false
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.19.0'
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install Python dependencies
+        run: python -m pip install --upgrade pip setuptools
+        shell: bash
+
+      - name: Install npm dependencies
+        run: npm install
+        shell: bash
+
+      - name: Configure node-gyp
+        run: npm run configure
+        shell: bash
+
+      - name: Create builds directory for Windows
+        if: matrix.os == 'windows-latest'
+        run: New-Item -ItemType Directory -Force -Path builds/windows_x64
+        shell: pwsh
+
       - name: Prebuild binaries for Node.js 20 (Windows)
         if: matrix.os == 'windows-latest'
         run: |
