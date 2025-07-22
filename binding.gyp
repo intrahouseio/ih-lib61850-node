@@ -99,6 +99,8 @@
                 "build/Release/iec61850.dll"
               ],
               "action": [
+                "cmd.exe",
+                "/c",
                 "copy",
                 "lib\\build\\iec61850.dll",
                 "build\\Release\\"
