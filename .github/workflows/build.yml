@@ -152,7 +152,18 @@ jobs:
         run: |
           if [ "${{ matrix.os }}" == "macos-latest" ] && [ "${{ matrix.arch }}" == "x64" ]; then
             echo "output_dir=macos_x64" >> $GITHUB_OUTPUT
-стили> - name: Determine output directory (Windows)
+          elif [ "${{ matrix.os }}" == "macos-latest" ] && [ "${{ matrix.arch }}" == "arm64" ]; then
+            echo "output_dir=macos_arm64" >> $GITHUB_OUTPUT
+          elif [ "${{ matrix.os }}" == "ubuntu-latest" ] && [ "${{ matrix.arch }}" == "x64" ]; then
+            echo "output_dir=linux_x64" >> $GITHUB_OUTPUT
+          elif [ "${{ matrix.os }}" == "ubuntu-latest" ] && [ "${{ matrix.arch }}" == "arm64" ]; then
+            echo "output_dir=linux_arm64" >> $GITHUB_OUTPUT
+          elif [ "${{ matrix.os }}" == "ubuntu-latest" ] && [ "${{ matrix.arch }}" == "arm" ]; then
+            echo "output_dir=linux_arm" >> $GITHUB_OUTPUT
+          fi
+        shell: bash
+
+      - name: Determine output directory (Windows)
         if: matrix.os == 'windows-latest'
         id: set-output-dir-windows
         run: |
