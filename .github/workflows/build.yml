@@ -270,219 +270,219 @@ jobs:
             ${{ steps.get-prebuild.outputs.file }}
             ${{ matrix.os == 'windows-latest' && 'builds/windows_x64/iec61850.dll' || '' }}
 
-    update-builds-and-publish:
-      needs: build-and-upload
-      runs-on: ubuntu-latest
-      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-      steps:
-        - name: Checkout repository
-          uses: actions/checkout@v4
-          with:
-            fetch-depth: 0
+  update-builds-and-publish:
+    needs: build-and-upload
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-        - name: Setup Node.js
-          uses: actions/setup-node@v4
-          with:
-            node-version: '20.19.0'
-            registry-url: 'https://registry.npmjs.org'
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.19.0'
+          registry-url: 'https://registry.npmjs.org'
 
-        - name: Install semver
-          run: npm install -g semver
-          shell: bash
+      - name: Install semver
+        run: npm install -g semver
+        shell: bash
 
-        - name: Debug npm config
-          run: npm config list
-          env:
-            NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Debug npm config
+        run: npm config list
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-        - name: Verify npm authentication
-          run: npm whoami
-          env:
-            NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Verify npm authentication
+        run: npm whoami
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-        - name: Get package version
-          id: package-version
-          run: echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
-          shell: bash
+      - name: Get package version
+        id: package-version
+        run: echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
+        shell: bash
 
-        - name: Download all artifacts
-          uses: actions/download-artifact@v4
-          with:
-            path: artifacts
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
 
-        - name: Install jq
-          run: sudo apt-get update && sudo apt-get install -y jq
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
 
-        - name: Debug artifact contents
-          run: |
-            echo "Содержимое директории artifacts:"
-            ls -R artifacts
-          shell: bash
+      - name: Debug artifact contents
+        run: |
+          echo "Содержимое директории artifacts:"
+          ls -R artifacts
+        shell: bash
 
-        - name: Update builds folder
-          run: |
-            # Очищаем папку builds, если она существует
-            rm -rf builds
-            mkdir -p builds
+      - name: Update builds folder
+        run: |
+          # Очищаем папку builds, если она существует
+          rm -rf builds
+          mkdir -p builds
 
-            # Карта соответствий для именования папок
-            declare -A platform_map=(
-              ["linux-arm"]="linux_arm"
-              ["linux-arm64"]="linux_arm64"
-              ["linux-x64"]="linux_x64"
-              ["darwin-arm64"]="macos_arm64"
-              ["darwin-x64"]="macos_x64"
-              ["win32-x64"]="windows_x64"
-            )
+          # Карта соответствий для именования папок
+          declare -A platform_map=(
+            ["linux-arm"]="linux_arm"
+            ["linux-arm64"]="linux_arm64"
+            ["linux-x64"]="linux_x64"
+            ["darwin-arm64"]="macos_arm64"
+            ["darwin-x64"]="macos_x64"
+            ["win32-x64"]="windows_x64"
+          )
 
-            # Перебираем все скачанные артефакты
-            for artifact_dir in artifacts/addon_iec61850-*; do
-              if [ -d "$artifact_dir" ]; then
-                echo "Обрабатываем директорию: $artifact_dir"
-                for tarball in "$artifact_dir"/*.tar.gz; do
-                  if [ -f "$tarball" ]; then
-                    echo "Найден tarball: $tarball"
-                    filename=$(basename "$tarball")
-                    platform_arch=$(echo "$filename" | sed -n 's/ih-libiec61850-node-v[0-9.]*-\(node-v[0-9]*\|napi\)-\(.*\)\.tar\.gz/\2/p')
-                    if [[ -n "${platform_map[$platform_arch]}" ]]; then
-                      target_dir="builds/${platform_map[$platform_arch]}"
-                      echo "Извлекаем в: $target_dir"
-                      mkdir -p "$target_dir"
-                      # Извлекаем и проверяем содержимое
-                      tar -xzf "$tarball" -C "$target_dir" --strip-components=1
-                      echo "Содержимое $target_dir после извлечения:"
-                      ls -l "$target_dir"
-                      # Проверяем возможные имена .node файла
-                      if [ -f "$target_dir/Release/addon_iec61850.node" ]; then
-                        echo "Найден Release/addon_iec61850.node, перемещаем"
-                        mv "$target_dir/Release/addon_iec61850.node" "$target_dir/"
-                        rm -rf "$target_dir/Release"
-                      elif [ -f "$target_dir/addon.node" ]; then
-                        echo "Найден addon.node, переименовываем"
-                        mv "$target_dir/addon.node" "$target_dir/addon_iec61850.node"
-                      elif [ -f "$target_dir/addon_iec61850.node" ]; then
-                        echo "Файл addon_iec61850.node уже на месте"
-                      else
-                        echo "Файл .node не найден в $target_dir. Проверяем содержимое tarball:"
-                        tar -tzf "$tarball"
-                        echo "Содержимое $artifact_dir:"
-                        ls -l "$artifact_dir"
-                        # Дополнительная проверка на наличие .node файлов
-                        find "$target_dir" -type f -name "*.node"
-                        exit 1
-                      fi
-                      # Копируем iec61850.dll, если он существует (для Windows)
-                      if [ -f "$artifact_dir/iec61850.dll" ]; then
-                        echo "Копируем iec61850.dll в $target_dir"
-                        cp "$artifact_dir/iec61850.dll" "$target_dir/"
-                      else
-                        echo "Файл iec61850.dll не найден в $artifact_dir"
-                      fi
+          # Перебираем все скачанные артефакты
+          for artifact_dir in artifacts/addon_iec61850-*; do
+            if [ -d "$artifact_dir" ]; then
+              echo "Обрабатываем директорию: $artifact_dir"
+              for tarball in "$artifact_dir"/*.tar.gz; do
+                if [ -f "$tarball" ]; then
+                  echo "Найден tarball: $tarball"
+                  filename=$(basename "$tarball")
+                  platform_arch=$(echo "$filename" | sed -n 's/ih-libiec61850-node-v[0-9.]*-\(node-v[0-9]*\|napi\)-\(.*\)\.tar\.gz/\2/p')
+                  if [[ -n "${platform_map[$platform_arch]}" ]]; then
+                    target_dir="builds/${platform_map[$platform_arch]}"
+                    echo "Извлекаем в: $target_dir"
+                    mkdir -p "$target_dir"
+                    # Извлекаем и проверяем содержимое
+                    tar -xzf "$tarball" -C "$target_dir" --strip-components=1
+                    echo "Содержимое $target_dir после извлечения:"
+                    ls -l "$target_dir"
+                    # Проверяем возможные имена .node файла
+                    if [ -f "$target_dir/Release/addon_iec61850.node" ]; then
+                      echo "Найден Release/addon_iec61850.node, перемещаем"
+                      mv "$target_dir/Release/addon_iec61850.node" "$target_dir/"
+                      rm -rf "$target_dir/Release"
+                    elif [ -f "$target_dir/addon.node" ]; then
+                      echo "Найден addon.node, переименовываем"
+                      mv "$target_dir/addon.node" "$target_dir/addon_iec61850.node"
+                    elif [ -f "$target_dir/addon_iec61850.node" ]; then
+                      echo "Файл addon_iec61850.node уже на месте"
                     else
-                      echo "Пропускаем неизвестную платформу/архитектуру: $platform_arch"
+                      echo "Файл .node не найден в $target_dir. Проверяем содержимое tarball:"
+                      tar -tzf "$tarball"
+                      echo "Содержимое $artifact_dir:"
+                      ls -l "$artifact_dir"
+                      # Дополнительная проверка на наличие .node файлов
+                      find "$target_dir" -type f -name "*.node"
+                      exit 1
+                    fi
+                    # Копируем iec61850.dll, если он существует (для Windows)
+                    if [ -f "$artifact_dir/iec61850.dll" ]; then
+                      echo "Копируем iec61850.dll в $target_dir"
+                      cp "$artifact_dir/iec61850.dll" "$target_dir/"
+                    else
+                      echo "Файл iec61850.dll не найден в $artifact_dir"
                     fi
                   else
-                    echo "Файл tarball не найден в $artifact_dir"
-                    ls -l "$artifact_dir"
-                    exit 1
+                    echo "Пропускаем неизвестную платформу/архитектуру: $platform_arch"
                   fi
-                done
-              else
-                echo "Директория $artifact_dir не существует"
-                ls -l artifacts/
-                exit 1
-              fi
-            done
-          shell: bash
-
-        - name: Verify builds folder
-          run: |
-            for dir in linux_arm linux_arm64 linux_x64 macos_arm64 macos_x64 windows_x64; do
-              if [ ! -f "builds/$dir/addon_iec61850.node" ]; then
-                echo "Отсутствует addon_iec61850.node в builds/$dir"
-                ls -l "builds/$dir" || echo "Директория builds/$dir не существует"
-                exit 1
-              fi
-              # Проверяем наличие iec61850.dll только для windows_x64
-              if [ "$dir" = "windows_x64" ] && [ ! -f "builds/$dir/iec61850.dll" ]; then
-                echo "Отсутствует iec61850.dll в builds/$dir"
-                ls -l "builds/$dir"
-                exit 1
-              fi
-            done
-          shell: bash
-
-        - name: Sync with origin/main
-          run: |
-            git fetch origin
-            git reset --hard origin/main
-          shell: bash
-
-        - name: Delete existing tag if it exists
-          run: |
-            git tag -d v$(node -p "require('./package.json').version") || true
-            git push origin :refs/tags/v$(node -p "require('./package.json').version") || true
-          shell: bash
-
-        - name: Publish to npm
-          env:
-            NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          run: |
-            # Настраиваем Git для коммитов
-            git config --global user.name "GitHub Actions"
-            git config --global user.email "actions@github.com"
-            
-            # Получаем последнюю версию пакета из npm
-            LATEST_VERSION=$(npm view @amigo9090/ih-libiec61850-node version || echo "0.0.0")
-            echo "Последняя версия в npm: $LATEST_VERSION"
-            
-            # Получаем текущую версию из package.json
-            CURRENT_VERSION=$(node -p "require('./package.json').version")
-            echo "Текущая версия в package.json: $CURRENT_VERSION"
-            
-            # Проверяем, совпадает ли версия в package.json с последней в npm
-            if [ "$CURRENT_VERSION" = "$LATEST_VERSION" ]; then
-              # Увеличиваем версию
-              NEW_VERSION=$(npx semver -i patch $LATEST_VERSION)
-              echo "Новая версия: $NEW_VERSION"
-              
-              # Обновляем версию в package.json
-              npm version $NEW_VERSION --no-git-tag-version
-              git add package.json package-lock.json
-              git commit -m "Bump version to $NEW_VERSION for release"
-              git push origin main
+                else
+                  echo "Файл tarball не найден в $artifact_dir"
+                  ls -l "$artifact_dir"
+                  exit 1
+                fi
+              done
             else
-              echo "Версия в package.json ($CURRENT_VERSION) не совпадает с npm ($LATEST_VERSION). Пропускаем обновление версии."
-              NEW_VERSION=$CURRENT_VERSION
+              echo "Директория $artifact_dir не существует"
+              ls -l artifacts/
+              exit 1
             fi
-            
-            # Проверяем наличие изменений в builds/
-            if git status --porcelain builds/ | grep .; then
-              git add builds/
-              git commit -m "Update builds for release $NEW_VERSION"
-              git push origin main
-            else
-              echo "Нет изменений для коммита в builds/"
+          done
+        shell: bash
+
+      - name: Verify builds folder
+        run: |
+          for dir in linux_arm linux_arm64 linux_x64 macos_arm64 macos_x64 windows_x64; do
+            if [ ! -f "builds/$dir/addon_iec61850.node" ]; then
+              echo "Отсутствует addon_iec61850.node в builds/$dir"
+              ls -l "builds/$dir" || echo "Директория builds/$dir не существует"
+              exit 1
             fi
-            
-            # Создаем временную копию package.json без scripts и devDependencies
-            jq 'del(.scripts) | del(.devDependencies)' package.json > package_npm.json
-            
-            # Заменяем package.json на версию без scripts и devDependencies
-            mv package_npm.json package.json
-            
-            # Проверяем, существует ли версия в npm
-            if npm view @amigo9090/ih-libiec61850-node@$NEW_VERSION version > /dev/null 2>&1; then
-              echo "Версия $NEW_VERSION уже существует в npm. Пропускаем публикацию."
-              exit 0
-            else
-              npm publish --access public
+            # Проверяем наличие iec61850.dll только для windows_x64
+            if [ "$dir" = "windows_x64" ] && [ ! -f "builds/$dir/iec61850.dll" ]; then
+              echo "Отсутствует iec61850.dll в builds/$dir"
+              ls -l "builds/$dir"
+              exit 1
             fi
+          done
+        shell: bash
+
+      - name: Sync with origin/main
+        run: |
+          git fetch origin
+          git reset --hard origin/main
+        shell: bash
+
+      - name: Delete existing tag if it exists
+        run: |
+          git tag -d v$(node -p "require('./package.json').version") || true
+          git push origin :refs/tags/v$(node -p "require('./package.json').version") || true
+        shell: bash
+
+      - name: Publish to npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          # Настраиваем Git для коммитов
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "actions@github.com"
+          
+          # Получаем последнюю версию пакета из npm
+          LATEST_VERSION=$(npm view @amigo9090/ih-libiec61850-node version || echo "0.0.0")
+          echo "Последняя версия в npm: $LATEST_VERSION"
+          
+          # Получаем текущую версию из package.json
+          CURRENT_VERSION=$(node -p "require('./package.json').version")
+          echo "Текущая версия в package.json: $CURRENT_VERSION"
+          
+          # Проверяем, совпадает ли версия в package.json с последней в npm
+          if [ "$CURRENT_VERSION" = "$LATEST_VERSION" ]; then
+            # Увеличиваем версию
+            NEW_VERSION=$(npx semver -i patch $LATEST_VERSION)
+            echo "Новая версия: $NEW_VERSION"
             
-            # Создаем тег для новой версии
-            git tag v$NEW_VERSION
-            git push origin v$NEW_VERSION
-            
-            # Восстанавливаем оригинальный package.json
-            git checkout -- package.json
-          shell: bash
+            # Обновляем версию в package.json
+            npm version $NEW_VERSION --no-git-tag-version
+            git add package.json package-lock.json
+            git commit -m "Bump version to $NEW_VERSION for release"
+            git push origin main
+          else
+            echo "Версия в package.json ($CURRENT_VERSION) не совпадает с npm ($LATEST_VERSION). Пропускаем обновление версии."
+            NEW_VERSION=$CURRENT_VERSION
+          fi
+          
+          # Проверяем наличие изменений в builds/
+          if git status --porcelain builds/ | grep .; then
+            git add builds/
+            git commit -m "Update builds for release $NEW_VERSION"
+            git push origin main
+          else
+            echo "Нет изменений для коммита в builds/"
+          fi
+          
+          # Создаем временную копию package.json без scripts и devDependencies
+          jq 'del(.scripts) | del(.devDependencies)' package.json > package_npm.json
+          
+          # Заменяем package.json на версию без scripts и devDependencies
+          mv package_npm.json package.json
+          
+          # Проверяем, существует ли версия в npm
+          if npm view @amigo9090/ih-libiec61850-node@$NEW_VERSION version > /dev/null 2>&1; then
+            echo "Версия $NEW_VERSION уже существует в npm. Пропускаем публикацию."
+            exit 0
+          else
+            npm publish --access public
+          fi
+          
+          # Создаем тег для новой версии
+          git tag v$NEW_VERSION
+          git push origin v$NEW_VERSION
+          
+          # Восстанавливаем оригинальный package.json
+          git checkout -- package.json
+        shell: bash
