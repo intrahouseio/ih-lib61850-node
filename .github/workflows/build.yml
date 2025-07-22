@@ -100,7 +100,7 @@ jobs:
         if: matrix.os == 'ubuntu-latest' && (matrix.arch == 'arm' || matrix.arch == 'arm64')
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf libc6-dev-armel-cross libc6-dev-armhf-cross          
+          sudo apt-get install -y gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf libc6-dev-armel-cross libc6-dev-armhf-cross
           sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
 
       - name: Install dependencies
@@ -131,15 +131,33 @@ jobs:
         run: npm run configure
         shell: pwsh
 
+      - name: Build libiec61850 for Windows
+        if: matrix.os == 'windows-latest'
+        run: |
+          cd lib
+          mkdir build && cd build
+          cmake .. -DBUILD_SHARED_LIBS=ON
+          cmake --build . --config Release
+          if (-Not (Test-Path iec61850.dll)) {
+            Write-Error "Failed to build iec61850.dll"
+            exit 1
+          }
+          Copy-Item -Path iec61850.dll -Destination .
+        shell: pwsh
+
       - name: Copy iec61850.dll for Windows
         if: matrix.os == 'windows-latest'
         run: |
+          Write-Output "Checking for lib/build/iec61850.dll"
+          Get-ChildItem -Path lib/build
           if (-Not (Test-Path lib/build/iec61850.dll)) {
             Write-Error "File lib/build/iec61850.dll not found"
             exit 1
           }
           New-Item -ItemType Directory -Force -Path builds/windows_x64
           Copy-Item -Path lib/build/iec61850.dll -Destination builds/windows_x64
+          Write-Output "Checking builds/windows_x64"
+          Get-ChildItem -Path builds/windows_x64
           if (-Not (Test-Path builds/windows_x64/iec61850.dll)) {
             Write-Error "Failed to copy iec61850.dll to builds/windows_x64"
             exit 1
@@ -196,13 +214,16 @@ jobs:
             export CXX=arm-linux-gnueabihf-g++
             export LINK=arm-linux-gnueabihf-g++
             npm run prebuild -- --target 20.19.0 --arch arm --cflags="-march=armv7-a -mfpu=vfp -mfloat-abi=hard"
+            ls -l prebuilds/@amigo9090/ih-libiec61850-node-v${{ steps.package-version.outputs.version }}-node-v*.tar.gz || echo "No prebuild file found for linux_arm"
           elif [ "${{ matrix.os }}" == "ubuntu-latest" ] && [ "${{ matrix.arch }}" == "arm64" ]; then
             export CC=aarch64-linux-gnu-gcc
             export CXX=aarch64-linux-gnu-g++
             export LINK=aarch64-linux-gnu-g++
             npm run prebuild -- --target 20.19.0 --arch arm64
+            ls -l prebuilds/@amigo9090/ih-libiec61850-node-v${{ steps.package-version.outputs.version }}-node-v*.tar.gz || echo "No prebuild file found for linux_arm64"
           else
             npm run prebuild -- --target 20.19.0 --arch ${{ matrix.arch }}
+            ls -l prebuilds/@amigo9090/ih-libiec61850-node-v${{ steps.package-version.outputs.version }}-node-v*.tar.gz || echo "No prebuild file found for ${{ matrix.os }}-${{ matrix.arch }}"
           fi
         shell: bash
 
@@ -210,6 +231,7 @@ jobs:
         if: matrix.os == 'windows-latest'
         run: |
           npm run prebuild -- --arch x64
+          Get-ChildItem -Path prebuilds/@amigo9090/ih-libiec61850-node-v${{ steps.package-version.outputs.version }}-node-v*.tar.gz || Write-Output "No prebuild file found for windows_x64"
         shell: pwsh
 
       - name: Get package version
@@ -221,6 +243,7 @@ jobs:
         id: get-prebuild
         run: |
           echo "file=$(ls prebuilds/@amigo9090/ih-libiec61850-node-v${{ steps.package-version.outputs.version }}-node-v*.tar.gz | head -n 1)" >> $GITHUB_OUTPUT
+          ls -l prebuilds/@amigo9090/ih-libiec61850-node-v${{ steps.package-version.outputs.version }}-node-v*.tar.gz || echo "No prebuild file found"
         shell: bash
 
       - name: Determine platform for artifact name (Unix)
@@ -322,6 +345,7 @@ jobs:
           # Перебираем все скачанные артефакты
           for artifact_dir in artifacts/addon_iec61850-*; do
             if [ -d "$artifact_dir" ]; then
+              echo "Processing artifact directory: $artifact_dir"
               for tarball in "$artifact_dir"/*.tar.gz; do
                 if [ -f "$tarball" ]; then
                   filename=$(basename "$tarball")
@@ -330,15 +354,23 @@ jobs:
                     target_dir="builds/${platform_map[$platform_arch]}"
                     mkdir -p "$target_dir"
                     tar -xzf "$tarball" -C "$target_dir" --strip-components=1
+                    ls -l "$target_dir"
                     if [ -f "$target_dir/Release/addon_iec61850.node" ]; then
                       mv "$target_dir/Release/addon_iec61850.node" "$target_dir/"
                       rm -rf "$target_dir/Release"
                     else
-                      mv "$target_dir/addon.node" "$target_dir/addon_iec61850.node" 2>/dev/null || true
+                      mv "$target_dir/addon.node" "$target_dir/addon_iec61850.node" 2>/dev/null || echo "No addon.node found in $target_dir"
+                    fi
+                    if [ -f "$target_dir/addon_iec61850.node" ]; then
+                      echo "Successfully moved addon_iec61850.node to $target_dir"
+                    else
+                      echo "Error: addon_iec61850.node not found in $target_dir"
                     fi
                   else
                     echo "Пропускаем неизвестную платформу/архитектуру: $platform_arch"
                   fi
+                else
+                  echo "No tarball found in $artifact_dir"
                 fi
               done
               # Копируем iec61850.dll для Windows
@@ -351,6 +383,8 @@ jobs:
                   echo "Ошибка: не удалось скопировать iec61850.dll в builds/windows_x64"
                   exit 1
                 fi
+              else
+                echo "No iec61850.dll found in $artifact_dir for windows-latest-x64"
               fi
             fi
           done
