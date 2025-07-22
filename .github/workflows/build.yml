@@ -134,8 +134,16 @@ jobs:
       - name: Copy iec61850.dll for Windows
         if: matrix.os == 'windows-latest'
         run: |
+          if (-Not (Test-Path lib/build/iec61850.dll)) {
+            Write-Error "File lib/build/iec61850.dll not found"
+            exit 1
+          }
           New-Item -ItemType Directory -Force -Path builds/windows_x64
           Copy-Item -Path lib/build/iec61850.dll -Destination builds/windows_x64
+          if (-Not (Test-Path builds/windows_x64/iec61850.dll)) {
+            Write-Error "Failed to copy iec61850.dll to builds/windows_x64"
+            exit 1
+          }
         shell: pwsh
 
       - name: Determine output directory (Unix)
@@ -144,18 +152,7 @@ jobs:
         run: |
           if [ "${{ matrix.os }}" == "macos-latest" ] && [ "${{ matrix.arch }}" == "x64" ]; then
             echo "output_dir=macos_x64" >> $GITHUB_OUTPUT
-          elif [ "${{ matrix.os }}" == "macos-latest" ] && [ "${{ matrix.arch }}" == "arm64" ]; then
-            echo "output_dir=macos_arm64" >> $GITHUB_OUTPUT
-          elif [ "${{ matrix.os }}" == "ubuntu-latest" ] && [ "${{ matrix.arch }}" == "x64" ]; then
-            echo "output_dir=linux_x64" >> $GITHUB_OUTPUT
-          elif [ "${{ matrix.os }}" == "ubuntu-latest" ] && [ "${{ matrix.arch }}" == "arm64" ]; then
-            echo "output_dir=linux_arm64" >> $GITHUB_OUTPUT
-          elif [ "${{ matrix.os }}" == "ubuntu-latest" ] && [ "${{ matrix.arch }}" == "arm" ]; then
-            echo "output_dir=linux_arm" >> $GITHUB_OUTPUT
-          fi
-        shell: bash
-
-      - name: Determine output directory (Windows)
+стили> - name: Determine output directory (Windows)
         if: matrix.os == 'windows-latest'
         id: set-output-dir-windows
         run: |
@@ -247,7 +244,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: addon_iec61850-${{ matrix.os }}-${{ matrix.arch }}
-          path: ${{ steps.get-prebuild.outputs.file }}
+          path: |
+            ${{ steps.get-prebuild.outputs.file }}
+            builds/windows_x64/iec61850.dll
+          if-no-files-found: warn
 
   update-builds-and-publish:
     needs: build-and-upload
@@ -330,6 +330,17 @@ jobs:
                   fi
                 fi
               done
+              # Копируем iec61850.dll для Windows
+              if [[ "$artifact_dir" == *"windows-latest-x64" && -f "$artifact_dir/iec61850.dll" ]]; then
+                mkdir -p builds/windows_x64
+                cp "$artifact_dir/iec61850.dll" builds/windows_x64/iec61850.dll
+                if [ -f builds/windows_x64/iec61850.dll ]; then
+                  echo "Успешно скопирован iec61850.dll в builds/windows_x64"
+                else
+                  echo "Ошибка: не удалось скопировать iec61850.dll в builds/windows_x64"
+                  exit 1
+                fi
+              fi
             fi
           done
         shell: bash
@@ -342,6 +353,11 @@ jobs:
               exit 1
             fi
           done
+          # Проверяем наличие iec61850.dll для Windows
+          if [ ! -f "builds/windows_x64/iec61850.dll" ]; then
+            echo "Отсутствует iec61850.dll в builds/windows_x64"
+            exit 1
+          fi
         shell: bash
 
       - name: Sync with origin/main
