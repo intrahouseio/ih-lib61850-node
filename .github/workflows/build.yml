@@ -201,18 +201,18 @@ jobs:
       - name: Prebuild binaries for Node.js 20 (Windows)
         if: matrix.os == 'windows-latest'
         run: |
-          npm run prebuild -- --arch x64
+          npm run prebuild -- --target 20.19.0 --arch x64
         shell: pwsh
 
       - name: Debug prebuild output (Windows)
         if: matrix.os == 'windows-latest'
         run: |
-          dir prebuilds
-          if (Test-Path prebuilds/*.tar.gz) {
+          dir prebuilds/@amigo9090
+          if (Test-Path prebuilds/@amigo9090/*.tar.gz) {
             Write-Output "Содержимое tar.gz:"
-            tar -tzf (Get-ChildItem prebuilds/*.tar.gz | Select-Object -First 1)
+            tar -tzf (Get-ChildItem prebuilds/@amigo9090/*.tar.gz | Select-Object -First 1)
           } else {
-            Write-Output "Файлы tar.gz не найдены в prebuilds/"
+            Write-Output "Файлы tar.gz не найдены в prebuilds/@amigo9090/"
             exit 1
           }
         shell: pwsh
@@ -227,8 +227,8 @@ jobs:
         run: |
           file=$(ls prebuilds/@amigo9090/ih-libiec61850-node-v${{ steps.package-version.outputs.version }}-*.tar.gz | head -n 1 || echo "")
           if [ -z "$file" ]; then
-            echo "Файл tar.gz не найден в prebuilds/"
-            ls -l prebuilds/
+            echo "Файл tar.gz не найден в prebuilds/@amigo9090/"
+            ls -l prebuilds/@amigo9090/
             exit 1
           fi
           echo "file=$file" >> $GITHUB_OUTPUT
@@ -270,7 +270,7 @@ jobs:
             ${{ steps.get-prebuild.outputs.file }}
             ${{ matrix.os == 'windows-latest' && 'builds/windows_x64/iec61850.dll' || '' }}
 
-  update-builds-and-publish:
+    update-builds-and-publish:
     needs: build-and-upload
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -367,6 +367,8 @@ jobs:
                       tar -tzf "$tarball"
                       echo "Содержимое $artifact_dir:"
                       ls -l "$artifact_dir"
+                      # Дополнительная проверка на наличие .node файлов
+                      find "$target_dir" -type f -name "*.node"
                       exit 1
                     fi
                     # Копируем iec61850.dll, если он существует (для Windows)
