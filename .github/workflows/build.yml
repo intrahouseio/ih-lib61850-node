@@ -200,7 +200,7 @@ jobs:
       - name: Copy Windows DLL for packaging
         if: matrix.os == 'windows-latest'
         run: |
-          $dllPath = "lib\build\Release\iec61850.dll"
+          $dllPath = "lib\build\iec61850.dll"
           $targetDir = "prebuilds\@amigo9090\ih-libiec61850-node-v${{ steps.package-version.outputs.version }}-node-v${{ matrix.node_version }}-win32-x64"
           
           if (Test-Path $dllPath) {
@@ -248,7 +248,7 @@ jobs:
       - name: Check library artifacts for Windows
         if: matrix.os == 'windows-latest'
         run: |
-          $dllPath = "lib\build\Release\iec61850.dll"
+          $dllPath = "lib\build\iec61850.dll"
           $addonPath = "build\Release\addon_iec61850.node"
           
           if (-not (Test-Path $dllPath)) {
