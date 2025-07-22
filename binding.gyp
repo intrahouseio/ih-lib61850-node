@@ -90,22 +90,21 @@
             "advapi32.lib"
           ],
           "actions": [
-          {
-            "action_name": "copy_files",
-            "inputs": [
-              "lib\\build\\iec61850.dll"              
-            ],
-            "outputs": [
-              "build\\Release\\iec61850.dll"
-              "builds\\windows_x64\\iec61850.dll"              
-            ],
-            "action": [
-              "copy",
-              "<@(_inputs)",
-              "build\\Release\\"
-            ]
-          }
-        ]
+            {
+              "action_name": "copy_dll_to_release",
+              "inputs": [
+                "lib/build/iec61850.dll"
+              ],
+              "outputs": [
+                "build/Release/iec61850.dll"
+              ],
+              "action": [
+                "copy",
+                "lib\\build\\iec61850.dll",
+                "build\\Release\\"
+              ]
+            }
+          ]
         }]
       ]
     }
