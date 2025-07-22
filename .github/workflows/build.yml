@@ -205,12 +205,27 @@ jobs:
           $dllPath = "lib\build\iec61850.dll"
           
           if (Test-Path $dllPath) {
-            Write-Host "Adding iec61850.dll to $tarFile"
-            tar -rf $tarFile -C (Split-Path $dllPath) --transform 's/^/build\/Release\//' (Split-Path $dllPath -Leaf)
+            Write-Host "Adding iec61850.dll to $tarFile under build/Release/"
+            7z a -ttar $tarFile ".\$dllPath" -spf -so | 7z a -si -ttar $tarFile "-ibuild\Release\iec61850.dll"
             Write-Host "Verifying tar contents:"
-            tar -tzf $tarFile
+            7z l $tarFile
           } else {
             Write-Host "::error::DLL not found at $dllPath"
+            exit 1
+          }
+        shell: pwsh
+
+      - name: Verify tarball contents (Windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          $tarFile = "prebuilds\@amigo9090\ih-libiec61850-node-v${{ steps.package-version.outputs.version }}-node-v115-win32-x64.tar.gz"
+          Write-Host "Checking contents of $tarFile"
+          7z l $tarFile
+          $contents = 7z l $tarFile
+          if ($contents -match "build/Release/iec61850.dll") {
+            Write-Host "Verified iec61850.dll in tarball"
+          } else {
+            Write-Host "::error::iec61850.dll not found in $tarFile"
             exit 1
           }
         shell: pwsh
