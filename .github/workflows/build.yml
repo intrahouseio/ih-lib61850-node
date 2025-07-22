@@ -180,7 +180,7 @@ jobs:
             $tempDir = New-Item -ItemType Directory -Path "temp\build\Release" -Force
             Copy-Item $dllPath "$tempDir\build\Release\iec61850.dll"
             # Добавляем DLL в tarball с префиксом пути из temp
-            tar -rf $tarFile -C $tempDir build\Release\iec61850.dll
+            tar -rf $tarFile -C $tempDir\build\Release\iec61850.dll
             Remove-Item $tempDir -Recurse -Force
             Write-Host "Verifying tar contents:"
             tar -tzf $tarFile
