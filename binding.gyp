@@ -88,7 +88,24 @@
             "bcrypt.lib",
             "crypt32.lib",
             "advapi32.lib"
-          ]
+          ],
+          "actions": [
+          {
+            "action_name": "copy_files",
+            "inputs": [
+              "lib\\build\\iec61850.dll"              
+            ],
+            "outputs": [
+              "build\\Release\\iec61850.dll"
+              "builds\\windows_x64\\iec61850.dll"              
+            ],
+            "action": [
+              "copy",
+              "<@(_inputs)",
+              "build\\Release\\"
+            ]
+          }
+        ]
         }]
       ]
     }
