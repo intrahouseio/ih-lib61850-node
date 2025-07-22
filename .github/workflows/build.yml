@@ -1,15 +1,12 @@
 name: Build and Publish
-
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
-
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
-
 jobs:
   create-release:
     runs-on: ubuntu-latest
@@ -17,24 +14,20 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20.19.0'
-
       - name: Get package version
         id: package-version
         run: echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
         shell: bash
-
       - name: Delete existing release
         run: |
           gh release delete v${{ steps.package-version.outputs.version }} --yes || true
           git push origin :refs/tags/v${{ steps.package-version.outputs.version }} || true
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
-
       - name: Create Release
         id: create_release
         uses: softprops/action-gh-release@v2
@@ -46,16 +39,13 @@ jobs:
           draft: false
           prerelease: false
           generate_release_notes: true
-
       - name: Save upload URL
         run: echo "https://uploads.github.com/repos/${{ github.repository }}/releases/${{ steps.create_release.outputs.id }}/assets{?name,label}" > upload_url.txt
-
       - name: Upload upload URL as artifact
         uses: actions/upload-artifact@v4
         with:
           name: upload-url
           path: upload_url.txt
-
   build-and-upload:
     needs: create-release
     runs-on: ${{ matrix.os }}
@@ -76,36 +66,29 @@ jobs:
           - os: ubuntu-latest
             arch: arm
       fail-fast: false
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20.19.0'
-
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
           pip install setuptools
-
       - name: Install cross-compilers for Linux ARM
         if: matrix.os == 'ubuntu-latest' && (matrix.arch == 'arm' || matrix.arch == 'arm64')
         run: |
           sudo apt-get update
           sudo apt-get install -y gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf libc6-dev-armel-cross libc6-dev-armhf-cross          
           sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
-
       - name: Install dependencies
         run: npm install
-
       - name: Configure build for Unix
         if: matrix.os != 'windows-latest'
         run: |
@@ -125,12 +108,10 @@ jobs:
             npm run configure
           fi
         shell: bash
-
       - name: Configure build for Windows
         if: matrix.os == 'windows-latest'
         run: npm run configure
         shell: pwsh      
-
       - name: Determine output directory (Unix)
         if: matrix.os != 'windows-latest'
         id: set-output-dir-unix
@@ -147,7 +128,6 @@ jobs:
             echo "output_dir=linux_arm" >> $GITHUB_OUTPUT
           fi
         shell: bash
-
       - name: Determine output directory (Windows)
         if: matrix.os == 'windows-latest'
         id: set-output-dir-windows
@@ -156,21 +136,18 @@ jobs:
             echo "output_dir=windows_x64" >> $env:GITHUB_OUTPUT
           }
         shell: pwsh
-
       - name: Check library format for ARM
         if: matrix.os == 'ubuntu-latest' && matrix.arch == 'arm'
         run: |
           file lib/build/libiec61850-ubuntu-latest-arm.a
           readelf -h lib/build/libiec61850-ubuntu-latest-arm.a || true
         shell: bash
-
       - name: Check library format for ARM64
         if: matrix.os == 'ubuntu-latest' && matrix.arch == 'arm64'
         run: |
           file lib/build/libiec61850-ubuntu-latest-arm64.a
           readelf -h lib/build/libiec61850-ubuntu-latest-arm64.a || true
         shell: bash
-
       - name: Prebuild binaries for Node.js 20
         if: matrix.os != 'windows-latest'
         run: |
@@ -190,7 +167,6 @@ jobs:
             npm run prebuild -- --target 20.19.0 --arch ${{ matrix.arch }}
           fi
         shell: bash
-
       - name: Prebuild binaries for Node.js 20 (Windows)
         if: matrix.os == 'windows-latest'
         run: |
@@ -200,8 +176,12 @@ jobs:
           $dllPath = "lib\build\iec61850.dll"
           
           if (Test-Path $dllPath) {
-            Write-Host "Adding iec61850.dll to $tarFile"
-            tar -rf $tarFile -C (Split-Path $dllPath) (Split-Path $dllPath -Leaf)
+            # Создаем временную структуру папок: build/Release
+            $tempDir = New-Item -ItemType Directory -Path "temp\build\Release" -Force
+            Copy-Item $dllPath "$tempDir\build\Release\iec61850.dll"
+            # Добавляем DLL в tarball с префиксом пути из temp
+            tar -rf $tarFile -C $tempDir build\Release\iec61850.dll
+            Remove-Item $tempDir -Recurse -Force
             Write-Host "Verifying tar contents:"
             tar -tzf $tarFile
           } else {
@@ -209,18 +189,15 @@ jobs:
             exit 1
           }
         shell: pwsh
-
       - name: Get package version
         id: package-version
         run: echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
         shell: bash
-
       - name: Get prebuild file
         id: get-prebuild
         run: |
           echo "file=$(ls prebuilds/@amigo9090/ih-libiec61850-node-v${{ steps.package-version.outputs.version }}-node-v*.tar.gz | head -n 1)" >> $GITHUB_OUTPUT
         shell: bash
-
       - name: Determine platform for artifact name (Unix)
         if: matrix.os != 'windows-latest'
         id: determine-platform-unix
@@ -231,7 +208,6 @@ jobs:
             echo "platform=darwin" >> $GITHUB_OUTPUT
           fi
         shell: bash
-
       - name: Determine platform for artifact name (Windows)
         if: matrix.os == 'windows-latest'
         id: determine-platform-windows
@@ -240,7 +216,6 @@ jobs:
             echo "platform=win32" >> $env:GITHUB_OUTPUT
           }
         shell: pwsh
-
       - name: Check library artifacts for Windows
         if: matrix.os == 'windows-latest'
         run: |
@@ -260,7 +235,6 @@ jobs:
           Write-Host "Windows artifacts verified:"
           Get-ChildItem -Path lib\build
         shell: pwsh
-
       - name: Upload prebuilt binaries to GitHub Releases
         uses: softprops/action-gh-release@v2
         env:
@@ -268,13 +242,11 @@ jobs:
         with:
           tag_name: v${{ steps.package-version.outputs.version }}
           files: ${{ steps.get-prebuild.outputs.file }}
-
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: addon_iec61850-${{ matrix.os }}-${{ matrix.arch }}
           path: ${{ steps.get-prebuild.outputs.file }}
-
   update-builds-and-publish:
     needs: build-and-upload
     runs-on: ubuntu-latest
@@ -284,40 +256,32 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20.19.0'
           registry-url: 'https://registry.npmjs.org'
-
       - name: Install semver
         run: npm install -g semver
         shell: bash
-
       - name: Debug npm config
         run: npm config list
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
       - name: Verify npm authentication
         run: npm whoami
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
       - name: Get package version
         id: package-version
         run: echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
         shell: bash
-
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts
-
       - name: Install jq
         run: sudo apt-get update && sudo apt-get install -y jq
-
       - name: Inspect tarball contents
         run: |
           for artifact_dir in artifacts/addon_iec61850-*; do
@@ -331,13 +295,11 @@ jobs:
             fi
           done
         shell: bash
-
       - name: Update builds folder
         run: |
           # Очищаем папку builds, если она существует
           rm -rf builds
           mkdir -p builds
-
           # Карта соответствий для именования папок
           declare -A platform_map=(
             ["linux-arm"]="linux_arm"
@@ -347,7 +309,6 @@ jobs:
             ["darwin-x64"]="macos_x64"
             ["win32-x64"]="windows_x64"
           )
-
           # Перебираем все скачанные артефакты
           for artifact_dir in artifacts/addon_iec61850-*; do
             if [ -d "$artifact_dir" ]; then
@@ -360,14 +321,16 @@ jobs:
                     target_dir="builds/${platform_map[$platform_arch]}"
                     mkdir -p "$target_dir"
                     echo "Extracting $tarball to $target_dir"
-                    tar -tzf "$tarball" # Список содержимого для отладки
                     tar -xzf "$tarball" -C "$target_dir" --strip-components=1
-                    ls -l "$target_dir" # Вывод содержимого для отладки
-                    if [ -f "$target_dir/Release/addon_iec61850.node" ]; then
-                      mv "$target_dir/Release/addon_iec61850.node" "$target_dir/"
+                    # Проверяем, есть ли папка Release (для Windows) и перемещаем из нее файлы
+                    if [ -d "$target_dir/Release" ]; then
+                      echo "Moving files from Release to $target_dir"
+                      mv "$target_dir/Release"/* "$target_dir/"
                       rm -rf "$target_dir/Release"
-                    else
-                      mv "$target_dir/addon.node" "$target_dir/addon_iec61850.node" 2>/dev/null || true
+                    fi
+                    # Переименовываем addon.node, если он есть
+                    if [ -f "$target_dir/addon.node" ]; then
+                      mv "$target_dir/addon.node" "$target_dir/addon_iec61850.node"
                     fi
                     # Проверка iec61850.dll для Windows
                     if [[ "${platform_map[$platform_arch]}" == "windows_x64" ]]; then
@@ -386,7 +349,6 @@ jobs:
             fi
           done
         shell: bash
-
       - name: Verify builds folder
         run: |
           # Проверка основных файлов
@@ -410,19 +372,16 @@ jobs:
           done
           echo "All build artifacts verified successfully"
         shell: bash
-
       - name: Sync with origin/main
         run: |
           git fetch origin
           git reset --hard origin/main
         shell: bash
-
       - name: Delete existing tag if it exists
         run: |
           git tag -d v$(node -p "require('./package.json').version") || true
           git push origin :refs/tags/v$(node -p "require('./package.json').version") || true
         shell: bash
-
       - name: Publish to npm
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
