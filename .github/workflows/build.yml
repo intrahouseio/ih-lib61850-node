@@ -210,18 +210,25 @@ jobs:
           $prebuildDir = "prebuilds\@amigo9090\ih-libiec61850-node-v${{ steps.package-version.outputs.version }}-node-v128-win32-x64"
           $tarFile = "prebuilds\@amigo9090\ih-libiec61850-node-v${{ steps.package-version.outputs.version }}-node-v128-win32-x64.tar.gz"
           $dllPath = "lib\build\iec61850.dll"
+          $nodePath = "build\Release\addon_iec61850.node"
           
           if (Test-Path $dllPath) {
-            # Создаем временную директорию
-            $tempDir = New-Item -ItemType Directory -Path "temp" -Force
-            Copy-Item $dllPath "$tempDir\iec61850.dll"
-            
-            # Добавляем DLL в tarball в корень архива
-            tar -rf $tarFile -C $tempDir iec61850.dll
-            
-            Remove-Item $tempDir -Recurse -Force
-            Write-Host "Verifying tar contents:"
-            tar -tzf $tarFile
+            if (Test-Path $nodePath) {
+              # Создаем временную директорию для сборки архiva
+              $tempDir = New-Item -ItemType Directory -Path "temp" -Force
+              Copy-Item $dllPath "$tempDir\iec61850.dll"
+              Copy-Item $nodePath "$tempDir\addon_iec61850.node"
+              
+              # Создаем новый tar.gz архив с обоими файлами
+              tar -czf $tarFile -C $tempDir addon_iec61850.node iec61850.dll
+              
+              Remove-Item $tempDir -Recurse -Force
+              Write-Host "Verifying tar contents:"
+              tar -tzf $tarFile
+            } else {
+              Write-Host "::error::Node addon not found at $nodePath"
+              exit 1
+            }
           } else {
             Write-Host "::error::DLL not found at $dllPath"
             exit 1
@@ -236,7 +243,7 @@ jobs:
       - name: Get prebuild file
         id: get-prebuild
         run: |
-          echo "file=$(ls prebuilds/@amigo9090/ih-libiec61850-node-v${{ steps.package-version.outputs.version }}-node-v*.tar.gz | head -n 1)" >> $GITHUB_OUTPUT
+          echo "file=$(ls prebuilds/@amigo9090/ih-libiec61850-node-v${{ steps.package-version.outputs.version }}-node-v128-*.tar.gz | head -n 1)" >> $GITHUB_OUTPUT
         shell: bash
 
       - name: Determine platform for artifact name (Unix)
@@ -379,13 +386,11 @@ jobs:
                     target_dir="builds/${platform_map[$platform_arch]}"
                     mkdir -p "$target_dir"
                     echo "Extracting $tarball to $target_dir"
-                    tar -xzf "$tarball" -C "$target_dir" --strip-components=1
+                    tar -xzf "$tarball" -C "$target_dir"
                     
-                    # Перемещаем файлы из папки Release (если существует)
-                    if [ -d "$target_dir/Release" ]; then
-                      mv "$target_dir/Release"/* "$target_dir/"
-                      rm -rf "$target_dir/Release"
-                    fi
+                    # Проверка содержимого после распаковки
+                    echo "Contents of $target_dir:"
+                    ls -l "$target_dir"
                     
                     # Проверка iec61850.dll для Windows
                     if [[ "${platform_map[$platform_arch]}" == "windows_x64" ]]; then
@@ -418,7 +423,7 @@ jobs:
             
             # Дополнительная проверка для Windows
             if [ "$dir" = "windows_x64" ]; then
-              if [ ! -f "builds/$ hire a ghostwriter dir/iec61850.dll" ]; then
+              if [ ! -f "builds/$dir/iec61850.dll" ]; then
                 echo "::error::Missing iec61850.dll in builds/$dir"
                 exit 1
               else
