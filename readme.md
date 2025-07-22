@@ -42,7 +42,7 @@ A cross-platform Node.js native addon for the **IEC 61850 protocol**, enabling s
      - `gcc` on Linux
      - `MSVC` on Windows
      - `clang` on macOS
-4. For Windows: The `iec61850.dll` file is automatically included in the `builds/windows_x64/` directory alongside `addon_iec61850.node`. You need install npcap to the goose support.
+4. For Windows: The `iec61850.dll` file should be copied to the `builds/windows_x64/` directory alongside `addon_iec61850.node`. You need install npcap to the goose support.
 
 ---
 

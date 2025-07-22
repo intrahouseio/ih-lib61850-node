@@ -129,7 +129,14 @@ jobs:
       - name: Configure build for Windows
         if: matrix.os == 'windows-latest'
         run: npm run configure
-        shell: pwsh      
+        shell: pwsh
+
+      - name: Copy iec61850.dll for Windows
+        if: matrix.os == 'windows-latest'
+        run: |
+          New-Item -ItemType Directory -Force -Path build/Release
+          Copy-Item -Path lib/build/iec61850.dll -Destination build/Release/
+        shell: pwsh
 
       - name: Determine output directory (Unix)
         if: matrix.os != 'windows-latest'
@@ -171,18 +178,6 @@ jobs:
           readelf -h lib/build/libiec61850-ubuntu-latest-arm64.a || true
         shell: bash
 
-      - name: Check DLL existence before prebuild
-        if: matrix.os == 'windows-latest'
-        run: |
-          $dllPath = "lib\build\iec61850.dll"
-          Write-Host "Checking for DLL at $dllPath"
-          Get-ChildItem -Path lib\build
-          if (-not (Test-Path $dllPath)) {
-            Write-Host "::error::DLL not found at $dllPath"
-            exit 1
-          }
-        shell: pwsh
-
       - name: Prebuild binaries for Node.js 20
         if: matrix.os != 'windows-latest'
         run: |
@@ -206,33 +201,7 @@ jobs:
       - name: Prebuild binaries for Node.js 20 (Windows)
         if: matrix.os == 'windows-latest'
         run: |
-          npm run prebuild -- --arch x64 --target 20.19.0 --tag node-v128
-          $prebuildDir = "prebuilds\@amigo9090\ih-libiec61850-node-v${{ steps.package-version.outputs.version }}-node-v128-win32-x64"
-          $tarFile = "prebuilds\@amigo9090\ih-libiec61850-node-v${{ steps.package-version.outputs.version }}-node-v128-win32-x64.tar.gz"
-          $dllPath = "lib\build\iec61850.dll"
-          $nodePath = "build\Release\addon_iec61850.node"
-          
-          if (Test-Path $dllPath) {
-            if (Test-Path $nodePath) {
-              # Создаем временную директорию для сборки архiva
-              $tempDir = New-Item -ItemType Directory -Path "temp" -Force
-              Copy-Item $dllPath "$tempDir\iec61850.dll"
-              Copy-Item $nodePath "$tempDir\addon_iec61850.node"
-              
-              # Создаем новый tar.gz архив с обоими файлами
-              tar -czf $tarFile -C $tempDir addon_iec61850.node iec61850.dll
-              
-              Remove-Item $tempDir -Recurse -Force
-              Write-Host "Verifying tar contents:"
-              tar -tzf $tarFile
-            } else {
-              Write-Host "::error::Node addon not found at $nodePath"
-              exit 1
-            }
-          } else {
-            Write-Host "::error::DLL not found at $dllPath"
-            exit 1
-          }
+          npm run prebuild -- --arch x64
         shell: pwsh
 
       - name: Get package version
@@ -243,7 +212,7 @@ jobs:
       - name: Get prebuild file
         id: get-prebuild
         run: |
-          echo "file=$(ls prebuilds/@amigo9090/ih-libiec61850-node-v${{ steps.package-version.outputs.version }}-node-v128-*.tar.gz | head -n 1)" >> $GITHUB_OUTPUT
+          echo "file=$(ls prebuilds/@amigo9090/ih-libiec61850-node-v${{ steps.package-version.outputs.version }}-node-v*.tar.gz | head -n 1)" >> $GITHUB_OUTPUT
         shell: bash
 
       - name: Determine platform for artifact name (Unix)
@@ -264,27 +233,6 @@ jobs:
           if ("${{ matrix.os }}" -eq "windows-latest") {
             echo "platform=win32" >> $env:GITHUB_OUTPUT
           }
-        shell: pwsh
-
-      - name: Check library artifacts for Windows
-        if: matrix.os == 'windows-latest'
-        run: |
-          $dllPath = "lib\build\iec61850.dll"
-          $addonPath = "build\Release\addon_iec61850.node"
-          
-          if (-not (Test-Path $dllPath)) {
-            Write-Host "::error::DLL not found at $dllPath"
-            exit 1
-          }
-          
-          if (-not (Test-Path $addonPath)) {
-            Write-Host "::error::Addon not found at $addonPath"
-            exit 1
-          }
-          
-          Write-Host "Windows artifacts verified:"
-          Get-ChildItem -Path lib\build
-          Get-ChildItem -Path build\Release
         shell: pwsh
 
       - name: Upload prebuilt binaries to GitHub Releases
@@ -344,20 +292,6 @@ jobs:
       - name: Install jq
         run: sudo apt-get update && sudo apt-get install -y jq
 
-      - name: Inspect tarball contents
-        run: |
-          for artifact_dir in artifacts/addon_iec61850-*; do
-            if [ -d "$artifact_dir" ]; then
-              for tarball in "$artifact_dir"/*.tar.gz; do
-                if [ -f "$tarball" ]; then
-                  echo "Contents of $tarball:"
-                  tar -tzf "$tarball"
-                fi
-              done
-            fi
-          done
-        shell: bash
-
       - name: Update builds folder
         run: |
           # Очищаем папку builds, если она существует
@@ -379,27 +313,17 @@ jobs:
             if [ -d "$artifact_dir" ]; then
               for tarball in "$artifact_dir"/*.tar.gz; do
                 if [ -f "$tarball" ]; then
-                  echo "Processing tarball: $tarball"
                   filename=$(basename "$tarball")
                   platform_arch=$(echo "$filename" | sed -n 's/ih-libiec61850-node-v[0-9.]*-\(node-v[0-9]*\|napi\)-\(.*\)\.tar\.gz/\2/p')
                   if [[ -n "${platform_map[$platform_arch]}" ]]; then
                     target_dir="builds/${platform_map[$platform_arch]}"
                     mkdir -p "$target_dir"
-                    echo "Extracting $tarball to $target_dir"
-                    tar -xzf "$tarball" -C "$target_dir"
-                    
-                    # Проверка содержимого после распаковки
-                    echo "Contents of $target_dir:"
-                    ls -l "$target_dir"
-                    
-                    # Проверка iec61850.dll для Windows
-                    if [[ "${platform_map[$platform_arch]}" == "windows_x64" ]]; then
-                      if [ -f "$target_dir/iec61850.dll" ]; then
-                        echo "Verified iec61850.dll in $target_dir"
-                      else
-                        echo "::error::Missing iec61850.dll in $target_dir"
-                        exit 1
-                      fi
+                    tar -xzf "$tarball" -C "$target_dir" --strip-components=1
+                    if [ -f "$target_dir/Release/addon_iec61850.node" ]; then
+                      mv "$target_dir/Release/addon_iec61850.node" "$target_dir/"
+                      rm -rf "$target_dir/Release"
+                    else
+                      mv "$target_dir/addon.node" "$target_dir/addon_iec61850.node" 2>/dev/null || true
                     fi
                   else
                     echo "Пропускаем неизвестную платформу/архитектуру: $platform_arch"
@@ -412,26 +336,12 @@ jobs:
 
       - name: Verify builds folder
         run: |
-          # Проверка основных файлов
           for dir in linux_arm linux_arm64 linux_x64 macos_arm64 macos_x64 windows_x64; do
-            echo "Checking builds/$dir"
-            ls -l "builds/$dir"
             if [ ! -f "builds/$dir/addon_iec61850.node" ]; then
-              echo "::error::Missing addon_iec61850.node in builds/$dir"
+              echo "Отсутствует addon_iec61850.node в builds/$dir"
               exit 1
             fi
-            
-            # Дополнительная проверка для Windows
-            if [ "$dir" = "windows_x64" ]; then
-              if [ ! -f "builds/$dir/iec61850.dll" ]; then
-                echo "::error::Missing iec61850.dll in builds/$dir"
-                exit 1
-              else
-                echo "Verified iec61850.dll for Windows in builds/$dir"
-              fi
-            fi
           done
-          echo "All build artifacts verified successfully"
         shell: bash
 
       - name: Sync with origin/main
