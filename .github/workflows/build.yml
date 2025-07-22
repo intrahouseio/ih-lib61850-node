@@ -171,6 +171,18 @@ jobs:
           readelf -h lib/build/libiec61850-ubuntu-latest-arm64.a || true
         shell: bash
 
+      - name: Check DLL existence before prebuild
+        if: matrix.os == 'windows-latest'
+        run: |
+          $dllPath = "lib\build\iec61850.dll"
+          Write-Host "Checking for DLL at $dllPath"
+          Get-ChildItem -Path lib\build
+          if (-not (Test-Path $dllPath)) {
+            Write-Host "::error::DLL not found at $dllPath"
+            exit 1
+          }
+        shell: pwsh
+
       - name: Prebuild binaries for Node.js 20
         if: matrix.os != 'windows-latest'
         run: |
@@ -194,18 +206,18 @@ jobs:
       - name: Prebuild binaries for Node.js 20 (Windows)
         if: matrix.os == 'windows-latest'
         run: |
-          npm run prebuild -- --arch x64
-          $prebuildDir = "prebuilds\@amigo9090\ih-libiec61850-node-v${{ steps.package-version.outputs.version }}-node-v115-win32-x64"
-          $tarFile = "prebuilds\@amigo9090\ih-libiec61850-node-v${{ steps.package-version.outputs.version }}-node-v115-win32-x64.tar.gz"
+          npm run prebuild -- --arch x64 --target 20.19.0 --tag node-v128
+          $prebuildDir = "prebuilds\@amigo9090\ih-libiec61850-node-v${{ steps.package-version.outputs.version }}-node-v128-win32-x64"
+          $tarFile = "prebuilds\@amigo9090\ih-libiec61850-node-v${{ steps.package-version.outputs.version }}-node-v128-win32-x64.tar.gz"
           $dllPath = "lib\build\iec61850.dll"
           
           if (Test-Path $dllPath) {
-            # Создаем временную структуру папок
-            $tempDir = New-Item -ItemType Directory -Path "temp\build\Release" -Force
-            Copy-Item $dllPath "$tempDir\build\Release\iec61850.dll"
+            # Создаем временную директорию
+            $tempDir = New-Item -ItemType Directory -Path "temp" -Force
+            Copy-Item $dllPath "$tempDir\iec61850.dll"
             
-            # Добавляем DLL в tarball с правильным путем
-            tar -rf $tarFile -C $tempDir build\Release\iec61850.dll
+            # Добавляем DLL в tarball в корень архива
+            tar -rf $tarFile -C $tempDir iec61850.dll
             
             Remove-Item $tempDir -Recurse -Force
             Write-Host "Verifying tar contents:"
@@ -265,6 +277,7 @@ jobs:
           
           Write-Host "Windows artifacts verified:"
           Get-ChildItem -Path lib\build
+          Get-ChildItem -Path build\Release
         shell: pwsh
 
       - name: Upload prebuilt binaries to GitHub Releases
@@ -405,7 +418,7 @@ jobs:
             
             # Дополнительная проверка для Windows
             if [ "$dir" = "windows_x64" ]; then
-              if [ ! -f "builds/$dir/iec61850.dll" ]; then
+              if [ ! -f "builds/$ hire a ghostwriter dir/iec61850.dll" ]; then
                 echo "::error::Missing iec61850.dll in builds/$dir"
                 exit 1
               else
