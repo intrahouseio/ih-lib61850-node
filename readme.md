@@ -33,7 +33,7 @@ A cross-platform Node.js native addon for the **IEC 61850 protocol**, enabling s
 2. Install the package via npm:
 
    ```bash
-   npm install @amigo9090/ih-libiec61850-node
+   npm install @amigo9090/ih-libiec61850-node --ignore-scripts
    ```
 
 3. Prebuilt binaries will be automatically downloaded for your platform and architecture. If a prebuilt binary is unavailable, the addon will be compiled using `node-gyp`, requiring:
