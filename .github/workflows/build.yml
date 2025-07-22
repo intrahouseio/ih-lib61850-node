@@ -195,20 +195,20 @@ jobs:
         if: matrix.os == 'windows-latest'
         run: |
           npm run prebuild -- --arch x64
-          $prebuildDir = "prebuilds\@amigo9090\ih-libiec61850-node-v${{ steps.package-version.outputs.version }}-node-v${{ matrix.node_version }}-win32-x64"
-          $tarFile = "$prebuildDir.tar.gz"
+          $prebuildDir = "prebuilds\@amigo9090\ih-libiec61850-node-v${{ steps.package-version.outputs.version }}-node-v115-win32-x64"
+          $tarFile = "prebuilds\@amigo9090\ih-libiec61850-node-v${{ steps.package-version.outputs.version }}-node-v115-win32-x64.tar.gz"
           $dllPath = "lib\build\iec61850.dll"
           
           if (Test-Path $dllPath) {
             Write-Host "Adding iec61850.dll to $tarFile"
             tar -rf $tarFile -C (Split-Path $dllPath) (Split-Path $dllPath -Leaf)
+            Write-Host "Verifying tar contents:"
+            tar -tzf $tarFile
           } else {
             Write-Host "::error::DLL not found at $dllPath"
             exit 1
           }
         shell: pwsh
-        env:
-          node_version: ${{ '20' }}
 
       - name: Get package version
         id: package-version
@@ -362,6 +362,7 @@ jobs:
                     echo "Extracting $tarball to $target_dir"
                     tar -tzf "$tarball" # Список содержимого для отладки
                     tar -xzf "$tarball" -C "$target_dir" --strip-components=1
+                    ls -l "$target_dir" # Вывод содержимого для отладки
                     if [ -f "$target_dir/Release/addon_iec61850.node" ]; then
                       mv "$target_dir/Release/addon_iec61850.node" "$target_dir/"
                       rm -rf "$target_dir/Release"
@@ -400,7 +401,7 @@ jobs:
             # Дополнительная проверка для Windows
             if [ "$dir" = "windows_x64" ]; then
               if [ ! -f "builds/$dir/iec61850.dll" ]; then
-                echo "::error::Missing iec61850.dll in builds/windows_x64"
+                echo "::error::Missing iec61850.dll in builds/$dir"
                 exit 1
               else
                 echo "Verified iec61850.dll for Windows in builds/$dir"
