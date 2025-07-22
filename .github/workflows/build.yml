@@ -194,7 +194,7 @@ jobs:
       - name: Prebuild binaries for Node.js 20 (Windows)
         if: matrix.os == 'windows-latest'
         run: |
-          npm run prebuild -- --arch x64
+          npm run prebuild -- --arch x64 --include "lib\build\iec61850.dll"
         shell: pwsh
 
       - name: Copy Windows DLL for packaging
@@ -206,9 +206,11 @@ jobs:
           if (Test-Path $dllPath) {
             New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
             Copy-Item -Path $dllPath -Destination $targetDir
-            Write-Host "Copied iec61850.dll to prebuild directory"
+            Write-Host "Copied iec61850.dll to $targetDir"
+            dir $targetDir
           } else {
-            Write-Host "::warning::DLL not found at $dllPath"
+            Write-Host "::error::DLL not found at $dllPath"
+            exit 1
           }
         shell: pwsh
         env:
@@ -322,6 +324,20 @@ jobs:
       - name: Install jq
         run: sudo apt-get update && sudo apt-get install -y jq
 
+      - name: Inspect tarball contents
+        run: |
+          for artifact_dir in artifacts/addon_iec61850-*; do
+            if [ -d "$artifact_dir" ]; then
+              for tarball in "$artifact_dir"/*.tar.gz; do
+                if [ -f "$tarball" ]; then
+                  echo "Contents of $tarball:"
+                  tar -tzf "$tarball"
+                fi
+              done
+            fi
+          done
+        shell: bash
+
       - name: Update builds folder
         run: |
           # Очищаем папку builds, если она существует
@@ -343,17 +359,29 @@ jobs:
             if [ -d "$artifact_dir" ]; then
               for tarball in "$artifact_dir"/*.tar.gz; do
                 if [ -f "$tarball" ]; then
+                  echo "Processing tarball: $tarball"
                   filename=$(basename "$tarball")
                   platform_arch=$(echo "$filename" | sed -n 's/ih-libiec61850-node-v[0-9.]*-\(node-v[0-9]*\|napi\)-\(.*\)\.tar\.gz/\2/p')
                   if [[ -n "${platform_map[$platform_arch]}" ]]; then
                     target_dir="builds/${platform_map[$platform_arch]}"
                     mkdir -p "$target_dir"
+                    echo "Extracting $tarball to $target_dir"
+                    tar -tzf "$tarball" # Список содержимого для отладки
                     tar -xzf "$tarball" -C "$target_dir" --strip-components=1
                     if [ -f "$target_dir/Release/addon_iec61850.node" ]; then
                       mv "$target_dir/Release/addon_iec61850.node" "$target_dir/"
                       rm -rf "$target_dir/Release"
                     else
                       mv "$target_dir/addon.node" "$target_dir/addon_iec61850.node" 2>/dev/null || true
+                    fi
+                    # Проверка iec61850.dll для Windows
+                    if [[ "${platform_map[$platform_arch]}" == "windows_x64" ]]; then
+                      if [ -f "$target_dir/iec61850.dll" ]; then
+                        echo "Verified iec61850.dll in $target_dir"
+                      else
+                        echo "::error::Missing iec61850.dll in $target_dir"
+                        exit 1
+                      fi
                     fi
                   else
                     echo "Пропускаем неизвестную платформу/архитектуру: $platform_arch"
@@ -368,6 +396,8 @@ jobs:
         run: |
           # Проверка основных файлов
           for dir in linux_arm linux_arm64 linux_x64 macos_arm64 macos_x64 windows_x64; do
+            echo "Checking builds/$dir"
+            ls -l "builds/$dir"
             if [ ! -f "builds/$dir/addon_iec61850.node" ]; then
               echo "::error::Missing addon_iec61850.node in builds/$dir"
               exit 1
@@ -379,7 +409,7 @@ jobs:
                 echo "::error::Missing iec61850.dll in builds/windows_x64"
                 exit 1
               else
-                echo "Verified iec61850.dll for Windows"
+                echo "Verified iec61850.dll for Windows in builds/$dir"
               fi
             fi
           done
