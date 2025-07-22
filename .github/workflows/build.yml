@@ -204,6 +204,19 @@ jobs:
           npm run prebuild -- --arch x64
         shell: pwsh
 
+      - name: Debug prebuild output (Windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          dir prebuilds
+          if (Test-Path prebuilds/*.tar.gz) {
+            Write-Output "Содержимое tar.gz:"
+            tar -tzf (Get-ChildItem prebuilds/*.tar.gz | Select-Object -First 1)
+          } else {
+            Write-Output "Файлы tar.gz не найдены в prebuilds/"
+            exit 1
+          }
+        shell: pwsh
+
       - name: Get package version
         id: package-version
         run: echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
@@ -212,7 +225,13 @@ jobs:
       - name: Get prebuild file
         id: get-prebuild
         run: |
-          echo "file=$(ls prebuilds/@amigo9090/ih-libiec61850-node-v${{ steps.package-version.outputs.version }}-node-v*.tar.gz | head -n 1)" >> $GITHUB_OUTPUT
+          file=$(ls prebuilds/@amigo9090/ih-libiec61850-node-v${{ steps.package-version.outputs.version }}-*.tar.gz | head -n 1 || echo "")
+          if [ -z "$file" ]; then
+            echo "Файл tar.gz не найден в prebuilds/"
+            ls -l prebuilds/
+            exit 1
+          fi
+          echo "file=$file" >> $GITHUB_OUTPUT
         shell: bash
 
       - name: Determine platform for artifact name (Unix)
@@ -294,6 +313,12 @@ jobs:
       - name: Install jq
         run: sudo apt-get update && sudo apt-get install -y jq
 
+      - name: Debug artifact contents
+        run: |
+          echo "Содержимое директории artifacts:"
+          ls -R artifacts
+        shell: bash
+
       - name: Update builds folder
         run: |
           # Очищаем папку builds, если она существует
@@ -313,29 +338,57 @@ jobs:
           # Перебираем все скачанные артефакты
           for artifact_dir in artifacts/addon_iec61850-*; do
             if [ -d "$artifact_dir" ]; then
+              echo "Обрабатываем директорию: $artifact_dir"
               for tarball in "$artifact_dir"/*.tar.gz; do
                 if [ -f "$tarball" ]; then
+                  echo "Найден tarball: $tarball"
                   filename=$(basename "$tarball")
                   platform_arch=$(echo "$filename" | sed -n 's/ih-libiec61850-node-v[0-9.]*-\(node-v[0-9]*\|napi\)-\(.*\)\.tar\.gz/\2/p')
                   if [[ -n "${platform_map[$platform_arch]}" ]]; then
                     target_dir="builds/${platform_map[$platform_arch]}"
+                    echo "Извлекаем в: $target_dir"
                     mkdir -p "$target_dir"
+                    # Извлекаем и проверяем содержимое
                     tar -xzf "$tarball" -C "$target_dir" --strip-components=1
+                    echo "Содержимое $target_dir после извлечения:"
+                    ls -l "$target_dir"
+                    # Проверяем возможные имена .node файла
                     if [ -f "$target_dir/Release/addon_iec61850.node" ]; then
+                      echo "Найден Release/addon_iec61850.node, перемещаем"
                       mv "$target_dir/Release/addon_iec61850.node" "$target_dir/"
                       rm -rf "$target_dir/Release"
+                    elif [ -f "$target_dir/addon.node" ]; then
+                      echo "Найден addon.node, переименовываем"
+                      mv "$target_dir/addon.node" "$target_dir/addon_iec61850.node"
+                    elif [ -f "$target_dir/addon_iec61850.node" ]; then
+                      echo "Файл addon_iec61850.node уже на месте"
                     else
-                      mv "$target_dir/addon.node" "$target_dir/addon_iec61850.node" 2>/dev/null || true
+                      echo "Файл .node не найден в $target_dir. Проверяем содержимое tarball:"
+                      tar -tzf "$tarball"
+                      echo "Содержимое $artifact_dir:"
+                      ls -l "$artifact_dir"
+                      exit 1
                     fi
                     # Копируем iec61850.dll, если он существует (для Windows)
                     if [ -f "$artifact_dir/iec61850.dll" ]; then
+                      echo "Копируем iec61850.dll в $target_dir"
                       cp "$artifact_dir/iec61850.dll" "$target_dir/"
+                    else
+                      echo "Файл iec61850.dll не найден в $artifact_dir"
                     fi
                   else
                     echo "Пропускаем неизвестную платформу/архитектуру: $platform_arch"
                   fi
+                else
+                  echo "Файл tarball не найден в $artifact_dir"
+                  ls -l "$artifact_dir"
+                  exit 1
                 fi
               done
+            else
+              echo "Директория $artifact_dir не существует"
+              ls -l artifacts/
+              exit 1
             fi
           done
         shell: bash
@@ -345,11 +398,13 @@ jobs:
           for dir in linux_arm linux_arm64 linux_x64 macos_arm64 macos_x64 windows_x64; do
             if [ ! -f "builds/$dir/addon_iec61850.node" ]; then
               echo "Отсутствует addon_iec61850.node в builds/$dir"
+              ls -l "builds/$dir" || echo "Директория builds/$dir не существует"
               exit 1
             fi
             # Проверяем наличие iec61850.dll только для windows_x64
             if [ "$dir" = "windows_x64" ] && [ ! -f "builds/$dir/iec61850.dll" ]; then
               echo "Отсутствует iec61850.dll в builds/$dir"
+              ls -l "builds/$dir"
               exit 1
             fi
           done
