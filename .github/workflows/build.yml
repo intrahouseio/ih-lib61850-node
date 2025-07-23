@@ -309,8 +309,8 @@ jobs:
       - name: Update builds folder
         run: |
           # Очищаем папку builds, если она существует
-          rm -rf builds
-          mkdir -p builds
+          # rm -rf builds
+          # mkdir -p builds
 
           # Карта соответствий для именования папок
           declare -A platform_map=(
