@@ -309,8 +309,8 @@ jobs:
       - name: Update builds folder
         run: |
           # Очищаем папку builds, если она существует
-          # rm -rf builds
-          # mkdir -p builds
+          rm -rf builds
+          mkdir -p builds
 
           # Карта соответствий для именования папок
           declare -A platform_map=(
@@ -332,20 +332,26 @@ jobs:
                   if [[ -n "${platform_map[$platform_arch]}" ]]; then
                     target_dir="builds/${platform_map[$platform_arch]}"
                     mkdir -p "$target_dir"
-                    tar -xzf "$file" -C "$target_dir" --strip-components=1
-                    # Move .node file
-                    if [ -f "$target_dir/addon_iec61850.node" ]; then
-                      : # No move needed, already in place due to --strip-components=1
-                    elif [ -f "$target_dir/Release/addon_iec61850.node" ]; then
-                      mv "$target_dir/Release/addon_iec61850.node" "$target_dir/"
+                    # Добавляем отладку: выводим содержимое архива перед извлечением
+                    echo "Contents of $file:"
+                    tar -tf "$file"
+                    # Извлекаем без --strip-components=1, чтобы сохранить структуру
+                    tar -xzf "$file" -C "$target_dir"
+                    # Перемещаем .node файл, если он в поддиректории
+                    if [ -f "$target_dir/build/Release/addon_iec61850.node" ]; then
+                      mv "$target_dir/build/Release/addon_iec61850.node" "$target_dir/"
+                    elif [ -f "$target_dir/addon_iec61850.node" ]; then
+                      : # Уже на месте
                     fi
-                    # Move DLL for Windows
-                    if [ "${platform_map[$platform_arch]}" = "windows_x64" ] && [ -f "$target_dir/Release/iec61850.dll" ]; then
-                      mv "$target_dir/Release/iec61850.dll" "$target_dir/"
+                    # Перемещаем DLL для Windows, если он в поддиректории
+                    if [ "${platform_map[$platform_arch]}" = "windows_x64" ] && [ -f "$target_dir/build/Release/iec61850.dll" ]; then
+                      mv "$target_dir/build/Release/iec61850.dll" "$target_dir/"
+                    elif [ "${platform_map[$platform_arch]}" = "windows_x64" ] && [ -f "$target_dir/iec61850.dll" ]; then
+                      : # Уже на месте
                     fi
-                    # Remove Release directory if it exists
-                    if [ -d "$target_dir/Release" ]; then
-                      rm -rf "$target_dir/Release"
+                    # Удаляем временные директории, если они существуют
+                    if [ -d "$target_dir/build" ]; then
+                      rm -rf "$target_dir/build"
                     fi
                   else
                     echo "Пропускаем неизвестную платформу/архитектуру: $platform_arch"
