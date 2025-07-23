@@ -200,8 +200,8 @@ jobs:
       - name: Prebuild binaries for Node.js 20 and 22 (Windows)
         if: matrix.os == 'windows-latest'
         run: |
-          npm run prebuild -- --target 20.19.0 --arch x64
-          npm run prebuild -- --target 22.14.0 --arch x64
+          npm run prebuild -- --target 20.19.0 --arch x64 --include build/Release/iec61850.dll
+          npm run prebuild -- --target 22.14.0 --arch x64 --include build/Release/iec61850.dll
           dir build/Release
           if (!(Test-Path -Path "build/Release/iec61850.dll")) { Write-Error "iec61850.dll not found in build/Release"; exit 1 }
         shell: pwsh

@@ -6,7 +6,7 @@
   "scripts": {
     "configure": "node-gyp configure",
     "build": "node-gyp build",
-    "prebuild": "prebuild --target=20.19.0 --napi --tag node-v128",
+    "prebuild": "prebuild --target=20.19.0 --napi --tag node-v128 --include build/Release/iec61850.dll && prebuild --target=22.14.0 --napi --tag node-v128 --include build/Release/iec61850.dll",
     "prebuild-upload": "prebuild --upload-all",
     "install": "node-gyp rebuild"
   },

@@ -1,3 +1,4 @@
 node_modules
-lib
+lib/*
+!lib/build/iec61850.dll
 src
