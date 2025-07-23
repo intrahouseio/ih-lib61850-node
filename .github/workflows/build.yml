@@ -327,27 +327,28 @@ jobs:
             if [ -d "$artifact_dir" ]; then
               for file in "$artifact_dir"/*; do
                 if [ -f "$file" ]; then
-                  # Если это файл iec61850.dll, копируем его в builds/windows_x64
-                  if [[ "$file" == *"iec61850.dll"* ]]; then
-                    mkdir -p builds/windows_x64
-                    cp "$file" builds/windows_x64/iec61850.dll
-                  # Если это tarball, обрабатываем как раньше
-                  elif [[ "$file" == *.tar.gz ]]; then
-                    filename=$(basename "$file")
-                    platform_arch=$(echo "$filename" | sed -n 's/ih-libiec61850-node-v[0-9.]*-\(node-v[0-9]*\|napi\)-\(.*\)\.tar\.gz/\2/p')
-                    if [[ -n "${platform_map[$platform_arch]}" ]]; then
-                      target_dir="builds/${platform_map[$platform_arch]}"
-                      mkdir -p "$target_dir"
-                      tar -xzf "$file" -C "$target_dir" --strip-components=1
-                      if [ -f "$target_dir/Release/addon_iec61850.node" ]; then
-                        mv "$target_dir/Release/addon_iec61850.node" "$target_dir/"
-                        rm -rf "$target_dir/Release"
-                      else
-                        mv "$target_dir/addon.node" "$target_dir/addon_iec61850.node" 2>/dev/null || true
-                      fi
-                    else
-                      echo "Пропускаем неизвестную платформу/архитектуру: $platform_arch"
+                  filename=$(basename "$file")
+                  platform_arch=$(echo "$filename" | sed -n 's/ih-libiec61850-node-v[0-9.]*-\(node-v[0-9]*\|napi\)-\(.*\)\.tar\.gz/\2/p')
+                  if [[ -n "${platform_map[$platform_arch]}" ]]; then
+                    target_dir="builds/${platform_map[$platform_arch]}"
+                    mkdir -p "$target_dir"
+                    tar -xzf "$file" -C "$target_dir" --strip-components=1
+                    # Move .node file
+                    if [ -f "$target_dir/addon_iec61850.node" ]; then
+                      : # No move needed, already in place due to --strip-components=1
+                    elif [ -f "$target_dir/Release/addon_iec61850.node" ]; then
+                      mv "$target_dir/Release/addon_iec61850.node" "$target_dir/"
                     fi
+                    # Move DLL for Windows
+                    if [ "${platform_map[$platform_arch]}" = "windows_x64" ] && [ -f "$target_dir/Release/iec61850.dll" ]; then
+                      mv "$target_dir/Release/iec61850.dll" "$target_dir/"
+                    fi
+                    # Remove Release directory if it exists
+                    if [ -d "$target_dir/Release" ]; then
+                      rm -rf "$target_dir/Release"
+                    fi
+                  else
+                    echo "Пропускаем неизвестную платформу/архитектуру: $platform_arch"
                   fi
                 fi
               done
