@@ -19,8 +19,7 @@
   "license": "MIT",
   "files": [
     "index.js",
-    "builds/",
-    "lib/build/iec61850.dll",
+    "builds/",    
     "examples/"
   ],
   "dependencies": {
