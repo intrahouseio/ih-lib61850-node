@@ -20,7 +20,7 @@
   "files": [
     "index.js",
     "builds/",
-    "iec61850.dll",
+    "lib/build/iec61850.dll",
     "examples/"
   ],
   "dependencies": {

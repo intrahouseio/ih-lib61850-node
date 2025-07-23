@@ -88,22 +88,21 @@
             "bcrypt.lib",
             "crypt32.lib",
             "advapi32.lib"
-          ],
-          "actions": [
+          ]
+        }]
+      ]
+    },
+    {
+      "target_name": "copy_dll",
+      "type": "none",
+      "dependencies": ["addon_iec61850"],
+      "conditions": [
+        ["OS=='win'", {
+          "copies": [
             {
-              "action_name": "copy_dll_to_release",
-              "inputs": [
-                "lib/build/iec61850.dll"
-              ],
-              "outputs": [
-                "build/Release/iec61850.dll"
-              ],
-              "action": [
-                "cmd.exe",
-                "/c",
-                "copy",
-                "lib\\build\\iec61850.dll",
-                "build\\Release\\"
+              "destination": "<(PRODUCT_DIR)",
+              "files": [
+                "<(module_root_dir)/lib/build/iec61850.dll"
               ]
             }
           ]
