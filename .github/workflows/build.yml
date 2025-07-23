@@ -106,6 +106,12 @@ jobs:
       - name: Install dependencies
         run: npm install
 
+      - name: Check iec61850.dll existence
+        if: matrix.os == 'windows-latest'
+        run: |
+          if (!(Test-Path -Path "lib/build/iec61850.dll")) { Write-Error "iec61850.dll not found in lib/build"; exit 1 }
+        shell: pwsh
+
       - name: Configure build for Unix
         if: matrix.os != 'windows-latest'
         run: |
@@ -191,12 +197,13 @@ jobs:
           fi
         shell: bash
 
-      - name: Prebuild binaries for Node.js 20 (Windows)
+      - name: Prebuild binaries for Node.js 20 and 22 (Windows)
         if: matrix.os == 'windows-latest'
         run: |
-          npm run prebuild -- --arch x64
-          if (!(Test-Path -Path "builds/windows_x64")) { New-Item -ItemType Directory -Path "builds/windows_x64" }
-          Copy-Item -Path "build/Release/iec61850.dll" -Destination "builds/windows_x64/iec61850.dll" -Force
+          npm run prebuild -- --target 20.19.0 --arch x64
+          npm run prebuild -- --target 22.14.0 --arch x64
+          dir build/Release
+          if (!(Test-Path -Path "build/Release/iec61850.dll")) { Write-Error "iec61850.dll not found in build/Release"; exit 1 }
         shell: pwsh
 
       - name: Get package version
@@ -319,6 +326,11 @@ jobs:
                       rm -rf "$target_dir/Release"
                     else
                       mv "$target_dir/addon.node" "$target_dir/addon_iec61850.node" 2>/dev/null || true
+                    fi
+                    # Копируем iec61850.dll для windows_x64
+                    if [ "${platform_map[$platform_arch]}" = "windows_x64" ] && [ -f "$target_dir/Release/iec61850.dll" ]; then
+                      mv "$target_dir/Release/iec61850.dll" "$target_dir/iec61850.dll"
+                      rm -rf "$target_dir/Release"
                     fi
                   else
                     echo "Пропускаем неизвестную платформу/архитектуру: $platform_arch"
