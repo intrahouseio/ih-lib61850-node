@@ -1,6 +1,6 @@
 {
   "name": "@amigo9090/ih-libiec61850-node",
-  "version": "1.0.22",
+  "version": "1.0.23",
   "description": "Node.js addon for IEC 61850 client (MMS, GOOSE) using libiec61850",
   "main": "index.js",
   "scripts": {
@@ -19,7 +19,7 @@
   "license": "MIT",
   "files": [
     "index.js",
-    "builds/",    
+    "builds/",
     "examples/"
   ],
   "dependencies": {
