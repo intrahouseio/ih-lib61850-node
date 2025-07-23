@@ -100,7 +100,7 @@ jobs:
         if: matrix.os == 'ubuntu-latest' && (matrix.arch == 'arm' || matrix.arch == 'arm64')
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf libc6-dev-armel-cross libc6-dev-armhf-cross          
+          sudo apt-get install -y gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf libc6-dev-armel-cross libc6-dev-armhf-cross
           sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
 
       - name: Install dependencies
@@ -129,7 +129,7 @@ jobs:
       - name: Configure build for Windows
         if: matrix.os == 'windows-latest'
         run: npm run configure
-        shell: pwsh      
+        shell: pwsh
 
       - name: Determine output directory (Unix)
         if: matrix.os != 'windows-latest'
@@ -195,6 +195,8 @@ jobs:
         if: matrix.os == 'windows-latest'
         run: |
           npm run prebuild -- --arch x64
+          if (!(Test-Path -Path "builds/windows_x64")) { New-Item -ItemType Directory -Path "builds/windows_x64" }
+          Copy-Item -Path "build/Release/iec61850.dll" -Destination "builds/windows_x64/iec61850.dll" -Force
         shell: pwsh
 
       - name: Get package version
@@ -332,6 +334,11 @@ jobs:
           for dir in linux_arm linux_arm64 linux_x64 macos_arm64 macos_x64 windows_x64; do
             if [ ! -f "builds/$dir/addon_iec61850.node" ]; then
               echo "Отсутствует addon_iec61850.node в builds/$dir"
+              exit 1
+            fi
+            # Проверяем наличие iec61850.dll для Windows
+            if [ "$dir" = "windows_x64" ] && [ ! -f "builds/$dir/iec61850.dll" ]; then
+              echo "Отсутствует iec61850.dll в builds/$dir"
               exit 1
             fi
           done
