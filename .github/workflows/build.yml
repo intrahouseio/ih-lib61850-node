@@ -154,13 +154,18 @@ jobs:
           fi
         shell: bash
 
-      - name: Determine output directory (Windows)
+      - name: Determine output directory and DLL path (Windows)
         if: matrix.os == 'windows-latest'
         id: set-output-dir-windows
         run: |
-          if ("${{ matrix.arch }}" -eq "x64") {
-            echo "output_dir=windows_x64" >> $env:GITHUB_OUTPUT
+          $dllPath = "lib/build/iec61850.dll"
+          if (Test-Path $dllPath) {
+            echo "dll_path=$dllPath" >> $env:GITHUB_OUTPUT
+          } else {
+            Write-Error "iec61850.dll not found at $dllPath"
+            exit 1
           }
+          echo "output_dir=windows_x64" >> $env:GITHUB_OUTPUT
         shell: pwsh
 
       - name: Check library format for ARM
@@ -191,7 +196,7 @@ jobs:
             export CC=aarch64-linux-gnu-gcc
             export CXX=aarch64-linux-gnu-g++
             export LINK=aarch64-linux-gnu-g++
-            npm run prebuild -- --target 20.19.0 --arch arm64 --cflags="-march=armv8-a"
+            npm run prebuild -- --target 20.19.0 --arch arm64
           else
             npm run prebuild -- --target 20.19.0 --arch ${{ matrix.arch }}
           fi
@@ -206,14 +211,6 @@ jobs:
           if (!(Test-Path -Path "build/Release/iec61850.dll")) { Write-Error "iec61850.dll not found in build/Release"; exit 1 }
         shell: pwsh
 
-      - name: Check prebuild archive contents
-        if: matrix.os == 'windows-latest'
-        run: |
-          dir prebuilds
-          tar -tf prebuilds/@amigo9090/ih-libiec61850-node-v${{ steps.package-version.outputs.version }}-node-v115-win32-x64.tar.gz
-          tar -tf prebuilds/@amigo9090/ih-libiec61850-node-v${{ steps.package-version.outputs.version }}-node-v127-win32-x64.tar.gz
-        shell: pwsh
-
       - name: Get package version
         id: package-version
         run: echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
@@ -222,7 +219,12 @@ jobs:
       - name: Get prebuild file
         id: get-prebuild
         run: |
-          echo "file=$(ls prebuilds/@amigo9090/ih-libiec61850-node-v${{ steps.package-version.outputs.version }}-node-v*.tar.gz | head -n 1)" >> $GITHUB_OUTPUT
+          if [ "${{ matrix.os }}" == "windows-latest" ]; then
+            # Для Windows используем последний созданный tarball
+            echo "file=$(ls prebuilds/@amigo9090/ih-libiec61850-node-v${{ steps.package-version.outputs.version }}-node-v*.tar.gz | sort -V | tail -n 1)" >> $GITHUB_OUTPUT
+          else
+            echo "file=$(ls prebuilds/@amigo9090/ih-libiec61850-node-v${{ steps.package-version.outputs.version }}-node-v*.tar.gz | head -n 1)" >> $GITHUB_OUTPUT
+          fi
         shell: bash
 
       - name: Determine platform for artifact name (Unix)
@@ -257,7 +259,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: addon_iec61850-${{ matrix.os }}-${{ matrix.arch }}
-          path: ${{ steps.get-prebuild.outputs.file }}
+          path: |
+            ${{ steps.get-prebuild.outputs.file }}
+            ${{ steps.set-output-dir-windows.outputs.dll_path }}
 
   update-builds-and-publish:
     needs: build-and-upload
@@ -328,26 +332,20 @@ jobs:
                   if [[ -n "${platform_map[$platform_arch]}" ]]; then
                     target_dir="builds/${platform_map[$platform_arch]}"
                     mkdir -p "$target_dir"
-                    # Добавляем отладку: выводим содержимое архива перед извлечением
-                    echo "Contents of $file:"
-                    tar -tf "$file"
-                    # Извлекаем без --strip-components=1, чтобы сохранить структуру
-                    tar -xzf "$file" -C "$target_dir"
-                    # Перемещаем .node файл, если он в поддиректории
-                    if [ -f "$target_dir/build/Release/addon_iec61850.node" ]; then
-                      mv "$target_dir/build/Release/addon_iec61850.node" "$target_dir/"
-                    elif [ -f "$target_dir/addon_iec61850.node" ]; then
-                      : # Уже на месте
+                    tar -xzf "$file" -C "$target_dir" --strip-components=1
+                    # Move .node file
+                    if [ -f "$target_dir/addon_iec61850.node" ]; then
+                      : # No move needed, already in place due to --strip-components=1
+                    elif [ -f "$target_dir/Release/addon_iec61850.node" ]; then
+                      mv "$target_dir/Release/addon_iec61850.node" "$target_dir/"
                     fi
-                    # Перемещаем DLL для Windows, если он в поддиректории
-                    if [ "${platform_map[$platform_arch]}" = "windows_x64" ] && [ -f "$target_dir/build/Release/iec61850.dll" ]; then
-                      mv "$target_dir/build/Release/iec61850.dll" "$target_dir/"
-                    elif [ "${platform_map[$platform_arch]}" = "windows_x64" ] && [ -f "$target_dir/iec61850.dll" ]; then
-                      : # Уже на месте
+                    # Move DLL for Windows
+                    if [ "${platform_map[$platform_arch]}" = "windows_x64" ] && [ -f "$target_dir/Release/iec61850.dll" ]; then
+                      mv "$target_dir/Release/iec61850.dll" "$target_dir/"
                     fi
-                    # Удаляем временные директории, если они существуют
-                    if [ -d "$target_dir/build" ]; then
-                      rm -rf "$target_dir/build"
+                    # Remove Release directory if it exists
+                    if [ -d "$target_dir/Release" ]; then
+                      rm -rf "$target_dir/Release"
                     fi
                   else
                     echo "Пропускаем неизвестную платформу/архитектуру: $platform_arch"
@@ -356,6 +354,7 @@ jobs:
               done
             fi
           done
+
         shell: bash
 
       - name: Copy iec61850.dll for Windows
