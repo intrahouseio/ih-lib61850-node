@@ -354,7 +354,16 @@ jobs:
               done
             fi
           done
+        shell: bash
 
+      - name: Ensure addon_iec61850.node is in builds/windows_x64
+        run: |
+          mkdir -p builds/windows_x64
+          if [ ! -f "builds/windows_x64/addon_iec61850.node" ]; then
+            echo "Файл addon_iec61850.node отсутствует, пытаюсь найти и скопировать"
+            # Ищем файл в артефактах
+            find artifacts -name "addon_iec61850.node" -exec cp {} builds/windows_x64/ \; || echo "Не удалось найти addon_iec61850.node"
+          fi
         shell: bash
 
       - name: Copy iec61850.dll for Windows
