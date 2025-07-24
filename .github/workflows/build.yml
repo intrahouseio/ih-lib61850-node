@@ -154,18 +154,13 @@ jobs:
           fi
         shell: bash
 
-      - name: Determine output directory and DLL path (Windows)
+      - name: Determine output directory (Windows)
         if: matrix.os == 'windows-latest'
         id: set-output-dir-windows
         run: |
-          $dllPath = "lib/build/iec61850.dll"
-          if (Test-Path $dllPath) {
-            echo "dll_path=$dllPath" >> $env:GITHUB_OUTPUT
-          } else {
-            Write-Error "iec61850.dll not found at $dllPath"
-            exit 1
+          if ("${{ matrix.arch }}" -eq "x64") {
+            echo "output_dir=windows_x64" >> $env:GITHUB_OUTPUT
           }
-          echo "output_dir=windows_x64" >> $env:GITHUB_OUTPUT
         shell: pwsh
 
       - name: Check library format for ARM
@@ -196,7 +191,7 @@ jobs:
             export CC=aarch64-linux-gnu-gcc
             export CXX=aarch64-linux-gnu-g++
             export LINK=aarch64-linux-gnu-g++
-            npm run prebuild -- --target 20.19.0 --arch arm64
+            npm run prebuild -- --target 20.19.0 --arch arm64 --cflags="-march=armv8-a"
           else
             npm run prebuild -- --target 20.19.0 --arch ${{ matrix.arch }}
           fi
@@ -211,6 +206,14 @@ jobs:
           if (!(Test-Path -Path "build/Release/iec61850.dll")) { Write-Error "iec61850.dll not found in build/Release"; exit 1 }
         shell: pwsh
 
+      - name: Check prebuild archive contents
+        if: matrix.os == 'windows-latest'
+        run: |
+          dir prebuilds
+          tar -tf prebuilds/@amigo9090/ih-libiec61850-node-v${{ steps.package-version.outputs.version }}-node-v115-win32-x64.tar.gz
+          tar -tf prebuilds/@amigo9090/ih-libiec61850-node-v${{ steps.package-version.outputs.version }}-node-v127-win32-x64.tar.gz
+        shell: pwsh
+
       - name: Get package version
         id: package-version
         run: echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
@@ -219,12 +222,7 @@ jobs:
       - name: Get prebuild file
         id: get-prebuild
         run: |
-          if [ "${{ matrix.os }}" == "windows-latest" ]; then
-            # Для Windows используем последний созданный tarball
-            echo "file=$(ls prebuilds/@amigo9090/ih-libiec61850-node-v${{ steps.package-version.outputs.version }}-node-v*.tar.gz | sort -V | tail -n 1)" >> $GITHUB_OUTPUT
-          else
-            echo "file=$(ls prebuilds/@amigo9090/ih-libiec61850-node-v${{ steps.package-version.outputs.version }}-node-v*.tar.gz | head -n 1)" >> $GITHUB_OUTPUT
-          fi
+          echo "file=$(ls prebuilds/@amigo9090/ih-libiec61850-node-v${{ steps.package-version.outputs.version }}-node-v*.tar.gz | head -n 1)" >> $GITHUB_OUTPUT
         shell: bash
 
       - name: Determine platform for artifact name (Unix)
@@ -259,9 +257,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: addon_iec61850-${{ matrix.os }}-${{ matrix.arch }}
-          path: |
-            ${{ steps.get-prebuild.outputs.file }}
-            ${{ steps.set-output-dir-windows.outputs.dll_path }}
+          path: ${{ steps.get-prebuild.outputs.file }}
 
   update-builds-and-publish:
     needs: build-and-upload
@@ -360,8 +356,16 @@ jobs:
               done
             fi
           done
+        shell: bash
 
-          # Явная проверка DLL для Windows
+      - name: Copy iec61850.dll for Windows
+        run: |
+          mkdir -p builds/windows_x64
+          cp lib/build/iec61850.dll builds/windows_x64/iec61850.dll
+        shell: bash
+
+      - name: Verify iec61850.dll is copied
+        run: |
           if [ ! -f "builds/windows_x64/iec61850.dll" ]; then
             echo "Ошибка: iec61850.dll не скопирован в builds/windows_x64"
             exit 1
