@@ -13,7 +13,7 @@ A cross-platform Node.js native addon for the **IEC 61850 protocol**, enabling s
 - **File Transfer**: Supports file transfer operations as per IEC 61850 standards.
 - **Flexible Integration**: Easy-to-use APIs for integration with Node.js applications, SCADA systems, or custom control solutions.
 - **Prebuilt Binaries**: Includes precompiled binaries for Node.js v20, simplifying setup and deployment.
-- **Windows DLL Support**: Includes `iec61850.dll` for Windows, you need manualy placed alongside `addon_iec61850.node` for use.
+- **Windows DLL Support**: Includes iec61850.dll for Windows, automatically placed alongside addon_iec61850.node for ease of use.
 
 ---
 
@@ -42,7 +42,7 @@ A cross-platform Node.js native addon for the **IEC 61850 protocol**, enabling s
      - `gcc` on Linux
      - `MSVC` on Windows
      - `clang` on macOS
-4. For Windows: The `iec61850.dll` file should be copied to the `builds/windows_x64/` directory alongside `addon_iec61850.node`. You need install npcap to the goose support.
+4. For Windows: The `iec61850.dll` file is automatically included in the `builds/windows_x64/` directory alongside `addon_iec61850.node`. You need install npcap to the goose support.
 
 ---
 
