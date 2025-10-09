@@ -8,6 +8,7 @@
 #include <functional>
 #include <ctime>
 #include <cinttypes>
+#include <cstdint>  // Для int64_t
 
 Napi::FunctionReference MmsClient::constructor;
 
@@ -145,18 +146,22 @@ void MmsClient::ConnectionHandler(void* parameter, IedConnection connection, Ied
 
     printf("Connection state changed to %s, clientID: %s\n", stateStr.c_str(), client->clientID_.c_str());
     client->tsfn_.NonBlockingCall([client, stateStr, isConnected](Napi::Env env, Napi::Function jsCallback) {
-        if (env.IsExceptionPending()) {
-            printf("ConnectionHandler: Exception pending in env, clientID: %s\n", client->clientID_.c_str());
-            return;
+        try {
+            if (env.IsExceptionPending()) {
+                printf("ConnectionHandler: Exception pending in env, clientID: %s\n", client->clientID_.c_str());
+                return;
+            }
+            Napi::Object eventObj = Napi::Object::New(env);
+            eventObj.Set("clientID", Napi::String::New(env, client->clientID_.c_str()));
+            eventObj.Set("type", Napi::String::New(env, "control"));
+            eventObj.Set("event", Napi::String::New(env, "stateChanged"));
+            eventObj.Set("state", Napi::String::New(env, stateStr));
+            eventObj.Set("isConnected", Napi::Boolean::New(env, isConnected));
+            std::vector<napi_value> args = {Napi::String::New(env, "conn"), eventObj};
+            jsCallback.Call(args);
+        } catch (const Napi::Error& e) {
+            printf("N-API Callback Error in ConnectionHandler: %s, clientID: %s\n", e.Message().c_str(), client->clientID_.c_str());
         }
-        Napi::Object eventObj = Napi::Object::New(env);
-        eventObj.Set("clientID", Napi::String::New(env, client->clientID_.c_str()));
-        eventObj.Set("type", Napi::String::New(env, "control"));
-        eventObj.Set("event", Napi::String::New(env, "stateChanged"));
-        eventObj.Set("state", Napi::String::New(env, stateStr));
-        eventObj.Set("isConnected", Napi::Boolean::New(env, isConnected));
-        std::vector<napi_value> args = {Napi::String::New(env, "conn"), eventObj};
-        jsCallback.Call(args);
     });
 }
 
@@ -234,17 +239,21 @@ Napi::Value MmsClient::Connect(const Napi::CallbackInfo& info) {
                     primaryRetryCount = 0;
                     reserveRetryCount = 0;
                     tsfn_.NonBlockingCall([this](Napi::Env env, Napi::Function jsCallback) {
-                        if (env.IsExceptionPending()) {
-                            printf("Connect: Exception pending in env, clientID: %s\n", clientID_.c_str());
-                            return;
+                        try {
+                            if (env.IsExceptionPending()) {
+                                printf("Connect: Exception pending in env, clientID: %s\n", clientID_.c_str());
+                                return;
+                            }
+                            Napi::Object eventObj = Napi::Object::New(env);
+                            eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
+                            eventObj.Set("type", Napi::String::New(env, "control"));
+                            eventObj.Set("event", Napi::String::New(env, "opened"));
+                            eventObj.Set("reason", Napi::String::New(env, "connection established"));
+                            eventObj.Set("isPrimaryIP", Napi::Boolean::New(env, usingPrimaryIp_));
+                            jsCallback.Call({Napi::String::New(env, "conn"), eventObj});
+                        } catch (const Napi::Error& e) {
+                            printf("N-API Callback Error in Connect: %s, clientID: %s\n", e.Message().c_str(), clientID_.c_str());
                         }
-                        Napi::Object eventObj = Napi::Object::New(env);
-                        eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
-                        eventObj.Set("type", Napi::String::New(env, "control"));
-                        eventObj.Set("event", Napi::String::New(env, "opened"));
-                        eventObj.Set("reason", Napi::String::New(env, "connection established"));
-                        eventObj.Set("isPrimaryIP", Napi::Boolean::New(env, usingPrimaryIp_));
-                        jsCallback.Call({Napi::String::New(env, "conn"), eventObj});
                     });
 
                     while (running_) {
@@ -278,18 +287,22 @@ Napi::Value MmsClient::Connect(const Napi::CallbackInfo& info) {
                 } else {
                     printf("Connection failed to %s:%d, error: %d, clientID: %s\n", currentIp.c_str(), port, error, clientID_.c_str());
                     tsfn_.NonBlockingCall([this, currentIp, isPrimary, retryCount = (isPrimary ? primaryRetryCount : reserveRetryCount)](Napi::Env env, Napi::Function jsCallback) {
-                        if (env.IsExceptionPending()) {
-                            printf("Connect: Exception pending in env, clientID: %s\n", clientID_.c_str());
-                            return;
+                        try {
+                            if (env.IsExceptionPending()) {
+                                printf("Connect: Exception pending in env, clientID: %s\n", clientID_.c_str());
+                                return;
+                            }
+                            Napi::Object eventObj = Napi::Object::New(env);
+                            eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
+                            eventObj.Set("type", Napi::String::New(env, "control"));
+                            eventObj.Set("event", Napi::String::New(env, "reconnecting"));
+                            eventObj.Set("reason", Napi::String::New(env, std::string("attempt ") + std::to_string(retryCount + 1) + " to " + currentIp));
+                            eventObj.Set("isPrimaryIP", Napi::Boolean::New(env, isPrimary));
+                            std::vector<napi_value> args = {Napi::String::New(env, "data"), eventObj};
+                            jsCallback.Call(args);
+                        } catch (const Napi::Error& e) {
+                            printf("N-API Callback Error in Connect: %s, clientID: %s\n", e.Message().c_str(), clientID_.c_str());
                         }
-                        Napi::Object eventObj = Napi::Object::New(env);
-                        eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
-                        eventObj.Set("type", Napi::String::New(env, "control"));
-                        eventObj.Set("event", Napi::String::New(env, "reconnecting"));
-                        eventObj.Set("reason", Napi::String::New(env, std::string("attempt ") + std::to_string(retryCount + 1) + " to " + currentIp));
-                        eventObj.Set("isPrimaryIP", Napi::Boolean::New(env, isPrimary));
-                        std::vector<napi_value> args = {Napi::String::New(env, "data"), eventObj};
-                        jsCallback.Call(args);
                     });
 
                     if (isPrimary) {
@@ -336,16 +349,20 @@ Napi::Value MmsClient::Connect(const Napi::CallbackInfo& info) {
     } catch (const std::exception& e) {
         printf("Exception in Connect: %s, clientID: %s\n", e.what(), clientID_.c_str());
         tsfn_.NonBlockingCall([this, e](Napi::Env env, Napi::Function jsCallback) {
-            if (env.IsExceptionPending()) {
-                printf("Connect: Exception pending in env, clientID: %s\n", clientID_.c_str());
-                return;
+            try {
+                if (env.IsExceptionPending()) {
+                    printf("Connect: Exception pending in env, clientID: %s\n", clientID_.c_str());
+                    return;
+                }
+                Napi::Object eventObj = Napi::Object::New(env);
+                eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
+                eventObj.Set("type", Napi::String::New(env, "error"));
+                eventObj.Set("reason", Napi::String::New(env, std::string("Thread exception: ") + e.what()));
+                std::vector<napi_value> args = {Napi::String::New(env, "data"), eventObj};
+                jsCallback.Call(args);
+            } catch (const Napi::Error& e) {
+                printf("N-API Callback Error in Connect: %s, clientID: %s\n", e.Message().c_str(), clientID_.c_str());
             }
-            Napi::Object eventObj = Napi::Object::New(env);
-            eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
-            eventObj.Set("type", Napi::String::New(env, "error"));
-            eventObj.Set("reason", Napi::String::New(env, std::string("Thread exception: ") + e.what()));
-            std::vector<napi_value> args = {Napi::String::New(env, "data"), eventObj};
-            jsCallback.Call(args);
         });
         running_ = false;
         return env.Undefined();
@@ -354,151 +371,290 @@ Napi::Value MmsClient::Connect(const Napi::CallbackInfo& info) {
 
 Napi::Value MmsClient::ReadDataSetValues(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
-    if (info.Length() < 1 || !info[0].IsString()) {
-        Napi::TypeError::New(env, "Expected datasetRef (string)").ThrowAsJavaScriptException();
+    
+    // Проверяем, передан ли массив datasetRefs
+    if (info.Length() < 1) {
+        Napi::TypeError::New(env, "Expected datasetRef (string) or datasetRefs (array of strings)").ThrowAsJavaScriptException();
         return env.Undefined();
     }
-    std::string datasetRef = info[0].As<Napi::String>().Utf8Value();
+    
+    std::vector<std::string> datasetRefs;
+    
+    if (info[0].IsString()) {
+        // Одиночный datasetRef
+        std::string datasetRef = info[0].As<Napi::String>().Utf8Value();
+        datasetRefs.push_back(datasetRef);
+    } else if (info[0].IsArray()) {
+        // Массив datasetRefs
+        Napi::Array datasetRefsArray = info[0].As<Napi::Array>();
+        for (uint32_t i = 0; i < datasetRefsArray.Length(); i++) {
+            if (datasetRefsArray.Get(i).IsString()) {
+                datasetRefs.push_back(datasetRefsArray.Get(i).As<Napi::String>().Utf8Value());
+            } else {
+                Napi::TypeError::New(env, "Expected each datasetRef to be a string").ThrowAsJavaScriptException();
+                return env.Undefined();
+            }
+        }
+    } else {
+        Napi::TypeError::New(env, "Expected datasetRef (string) or datasetRefs (array of strings)").ThrowAsJavaScriptException();
+        return env.Undefined();
+    }
+    
     std::lock_guard<std::mutex> lock(connMutex_);
     if (!connected_) {
         printf("ReadDataSetValues: Not connected, clientID: %s\n", clientID_.c_str());
         Napi::Error::New(env, "Not connected").ThrowAsJavaScriptException();
         return env.Undefined();
     }
+    
     try {
-        IedClientError error;
-        ClientDataSet dataSet = IedConnection_readDataSetValues(connection_, &error, datasetRef.c_str(), nullptr);
-       if (error != IED_ERROR_OK || dataSet == nullptr) {
-            printf("Failed to read dataset %s, error: %d, clientID: %s\n", datasetRef.c_str(), error, clientID_.c_str());
-            std::string errorMsg = "Failed to read dataset: " + std::to_string(error);
-            tsfn_.NonBlockingCall([this, datasetRef, errorMsg](Napi::Env env, Napi::Function jsCallback) {
+        std::vector<ResultData> results;
+        
+        for (const auto& datasetRef : datasetRefs) {
+            IedClientError error;
+            ClientDataSet dataSet = IedConnection_readDataSetValues(connection_, &error, datasetRef.c_str(), nullptr);
+            
+            if (error != IED_ERROR_OK || dataSet == nullptr) {
+                printf("Failed to read dataset %s, error: %d, clientID: %s\n", datasetRef.c_str(), error, clientID_.c_str());
+                ResultData resultData;
+                resultData.isValid = false;
+                resultData.errorReason = "Failed to read dataset: " + std::to_string(error);
+                results.push_back(resultData);
+                continue;
+            }
+            
+            MmsValue* values = ClientDataSet_getValues(dataSet);
+            if (values == nullptr) {
+                printf("No values in dataset %s, clientID: %s\n", datasetRef.c_str(), clientID_.c_str());
+                ResultData resultData;
+                resultData.isValid = false;
+                resultData.errorReason = "No values in dataset";
+                results.push_back(resultData);
+                ClientDataSet_destroy(dataSet);
+                continue;
+            }
+            
+            // Используем существующую функцию конвертации
+            std::function<ResultData(MmsValue*, const std::string&)> convertMmsValue;
+            convertMmsValue = [&](MmsValue* val, const std::string& attrName) -> ResultData {
+                ResultData data = { MmsValue_getType(val), 0.0f, 0LL, false, "", {}, {}, true, "" };
+                switch (data.type) {
+                    case MMS_FLOAT:
+                        data.floatValue = MmsValue_toFloat(val);
+                        if (std::isnan(data.floatValue) || std::isinf(data.floatValue)) {
+                            data.isValid = false;
+                            data.errorReason = "Invalid float value";
+                        }
+                        break;
+                    case MMS_INTEGER:
+                        data.intValue = MmsValue_toInt64(val);
+                        if (attrName == "ctlModel") {
+                            switch (data.intValue) {
+                                case 0: data.stringValue = "status-only"; break;
+                                case 1: data.stringValue = "direct-with-normal-security"; break;
+                                case 2: data.stringValue = "sbo-with-normal-security"; break;
+                                case 3: data.stringValue = "direct-with-enhanced-security"; break;
+                                case 4: data.stringValue = "sbo-with-enhanced-security"; break;
+                                default: data.stringValue = "unknown(" + std::to_string(data.intValue) + ")";
+                            }
+                        }
+                        break;
+                    case MMS_BOOLEAN:
+                        data.boolValue = MmsValue_getBoolean(val);
+                        break;
+                    case MMS_VISIBLE_STRING:
+                        data.stringValue = MmsValue_toString(val) ? MmsValue_toString(val) : "";
+                        break;
+                    case MMS_UTC_TIME: {
+                        uint64_t timestamp = MmsValue_getUtcTimeInMs(val);
+                        time_t time = timestamp / 1000;
+                        char timeStr[64];
+                        strftime(timeStr, sizeof(timeStr), "%Y-%m-%d %H:%M:%S", gmtime(&time));
+                        data.stringValue = std::string(timeStr) + "." + std::to_string(timestamp % 1000);
+                        } break;
+                    case MMS_BIT_STRING: {
+                        int bitSize = MmsValue_getBitStringSize(val);
+                        uint32_t bitInt = MmsValue_getBitStringAsInteger(val);
+                        data.intValue = static_cast<int64_t>(bitInt);
+                        if (attrName == "q") {
+                            std::string qualityStr;
+                            if (bitInt & QUALITY_VALIDITY_INVALID) qualityStr += "Invalid|";
+                            if (bitInt & QUALITY_VALIDITY_QUESTIONABLE) qualityStr += "Questionable|";
+                            if (qualityStr.empty()) qualityStr = "Good";
+                            else qualityStr.pop_back();
+                            data.stringValue = qualityStr;
+                        } else if (bitSize == 2 && attrName.find("stVal") != std::string::npos) {
+                            switch (bitInt) {
+                                case 0: data.stringValue = "intermediate-state"; break;
+                                case 1: data.stringValue = "off"; break;
+                                case 2: data.stringValue = "on"; break;
+                                case 3: data.stringValue = "bad-state"; break;
+                                default: data.stringValue = "unknown(" + std::to_string(bitInt) + ")";
+                            }
+                        } else {
+                            data.stringValue = "";
+                        }
+                        } break;
+                    case MMS_STRUCTURE: {
+                        int size = MmsValue_getArraySize(val);
+                        for (int j = 0; j < size; j++) {
+                            MmsValue* element = MmsValue_getElement(val, j);
+                            if (element) {
+                                std::string subAttrName = attrName + ".field" + std::to_string(j);
+                                ResultData subData = convertMmsValue(element, subAttrName);
+                                if (subData.isValid) data.structureElements.push_back(subData);
+                            }
+                        }
+                        } break;
+                    case MMS_ARRAY: {
+                        int size = MmsValue_getArraySize(val);
+                        for (int j = 0; j < size; j++) {
+                            MmsValue* element = MmsValue_getElement(val, j);
+                            if (element) {
+                                ResultData subData = convertMmsValue(element, attrName + "[" + std::to_string(j) + "]");
+                                data.arrayElements.push_back(subData);
+                            }
+                        }
+                        } break;
+                    case MMS_DATA_ACCESS_ERROR:
+                        data.isValid = false;
+                        data.errorReason = "Data access error";
+                        break;
+                    default:
+                        data.isValid = false;
+                        data.errorReason = "Unsupported type: " + std::to_string(data.type);
+                }
+                return data;
+            };
+            
+            ResultData resultData = convertMmsValue(values, datasetRef);
+            results.push_back(resultData);
+            ClientDataSet_destroy(dataSet);
+        }
+        
+        // Определяем тип события в зависимости от количества datasetRefs
+        std::string eventType = (datasetRefs.size() == 1) ? "dataSet" : "multipleDataSets";
+        
+        // Отправка события
+        tsfn_.NonBlockingCall([this, datasetRefs, results, eventType](Napi::Env env, Napi::Function jsCallback) {
+            try {
                 Napi::Object eventObj = Napi::Object::New(env);
                 eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
-                eventObj.Set("type", Napi::String::New(env, "error"));
-                eventObj.Set("reason", Napi::String::New(env, errorMsg));
-                eventObj.Set("datasetRef", Napi::String::New(env, datasetRef)); // Add datasetRef
-                jsCallback.Call({Napi::String::New(env, "data"), eventObj});
-            });
-            return env.Undefined();
-        }
-        MmsValue* values = ClientDataSet_getValues(dataSet);
-        if (values == nullptr) {
-            printf("No values in dataset %s, clientID: %s\n", datasetRef.c_str(), clientID_.c_str());
-            ClientDataSet_destroy(dataSet);
-            return env.Undefined();
-        }
-        std::function<ResultData(MmsValue*, const std::string&)> convertMmsValue;
-        convertMmsValue = [&](MmsValue* val, const std::string& attrName) -> ResultData {
-            ResultData data = { MmsValue_getType(val), 0.0f, 0, false, "", {}, {}, true, "" };
-            switch (data.type) {
-                case MMS_FLOAT:
-                    data.floatValue = MmsValue_toFloat(val);
-                    if (std::isnan(data.floatValue) || std::isinf(data.floatValue)) {
-                        data.isValid = false;
-                        data.errorReason = "Invalid float value";
-                    }
-                    break;
-                case MMS_INTEGER:
-                    data.intValue = MmsValue_toInt32(val);
-                    break;
-                case MMS_BOOLEAN:
-                    data.boolValue = MmsValue_getBoolean(val);
-                    break;
-                case MMS_VISIBLE_STRING:
-                    data.stringValue = MmsValue_toString(val) ? MmsValue_toString(val) : "";
-                    break;
-                case MMS_UTC_TIME: {
-                    uint64_t timestamp = MmsValue_getUtcTimeInMs(val);
-                    time_t time = timestamp / 1000;
-                    char timeStr[64];
-                    strftime(timeStr, sizeof(timeStr), "%Y-%m-%d %H:%M:%S", gmtime(&time));
-                    data.stringValue = std::string(timeStr) + "." + std::to_string(timestamp % 1000);
-                    } break;
-                case MMS_BIT_STRING: {
-                    int bitSize = MmsValue_getBitStringSize(val);
-                    char bitStr[128];
-                    snprintf(bitStr, sizeof(bitStr), "BitString(size=%d)", bitSize);
-                    data.stringValue = bitStr;
-                    } break;
-                case MMS_STRUCTURE: {
-                    int size = MmsValue_getArraySize(val);
-                    for (int j = 0; j < size; j++) {
-                        MmsValue* element = MmsValue_getElement(val, j);
-                        if (element) {
-                            std::string subAttrName = attrName + ".field" + std::to_string(j);
-                            ResultData subData = convertMmsValue(element, subAttrName);
-                            if (subData.isValid) data.structureElements.push_back(subData);
+                eventObj.Set("type", Napi::String::New(env, "data"));
+                eventObj.Set("event", Napi::String::New(env, eventType));
+                
+                if (eventType == "dataSet") {
+                    // Для одиночного DataSet сохраняем обратную совместимость
+                    eventObj.Set("datasetRef", Napi::String::New(env, datasetRefs[0]));
+                    
+                    std::function<Napi::Value(const ResultData&)> toNapiValue = [&](const ResultData& data) -> Napi::Value {
+                        if (!data.isValid) return Napi::String::New(env, data.errorReason);
+                        switch (data.type) {
+                            case MMS_FLOAT: return Napi::Number::New(env, data.floatValue);
+                            case MMS_INTEGER:
+                                if (!data.stringValue.empty()) {
+                                    return Napi::String::New(env, data.stringValue);
+                                }
+                                return Napi::Number::New(env, data.intValue);
+                            case MMS_BOOLEAN: return Napi::Boolean::New(env, data.boolValue);
+                            case MMS_VISIBLE_STRING: case MMS_UTC_TIME: return Napi::String::New(env, data.stringValue);
+                            case MMS_BIT_STRING:
+                                if (!data.stringValue.empty()) {
+                                    return Napi::String::New(env, data.stringValue);
+                                } else {
+                                    return Napi::Number::New(env, data.intValue);
+                                }
+                            case MMS_STRUCTURE: {
+                                Napi::Object structObj = Napi::Object::New(env);
+                                for (size_t i = 0; i < data.structureElements.size(); i++)
+                                    structObj.Set(Napi::String::New(env, "field" + std::to_string(i)), toNapiValue(data.structureElements[i]));
+                                return structObj;
+                            }
+                            case MMS_ARRAY: {
+                                Napi::Array array = Napi::Array::New(env, data.arrayElements.size());
+                                for (size_t i = 0; i < data.arrayElements.size(); i++)
+                                    array.Set(uint32_t(i), toNapiValue(data.arrayElements[i]));
+                                return array;
+                            }
+                            default: return Napi::String::New(env, "Unsupported type");
                         }
+                    };
+                    
+                    Napi::Value result = toNapiValue(results[0]);
+                    eventObj.Set("value", result);
+                    eventObj.Set("isValid", Napi::Boolean::New(env, results[0].isValid));
+                } else {
+                    // Для множественных DataSet
+                    Napi::Array datasetRefsArray = Napi::Array::New(env, datasetRefs.size());
+                    for (size_t i = 0; i < datasetRefs.size(); i++) {
+                        datasetRefsArray.Set(uint32_t(i), Napi::String::New(env, datasetRefs[i]));
                     }
-                    } break;
-                case MMS_ARRAY: {
-                    int size = MmsValue_getArraySize(val);
-                    for (int j = 0; j < size; j++) {
-                        MmsValue* element = MmsValue_getElement(val, j);
-                        if (element) {
-                            ResultData subData = convertMmsValue(element, attrName + "[" + std::to_string(j) + "]");
-                            data.arrayElements.push_back(subData);
+                    eventObj.Set("datasetRefs", datasetRefsArray);
+                    
+                    Napi::Array valuesArray = Napi::Array::New(env, results.size());
+                    std::function<Napi::Value(const ResultData&)> toNapiValue = [&](const ResultData& data) -> Napi::Value {
+                        if (!data.isValid) return Napi::String::New(env, data.errorReason);
+                        switch (data.type) {
+                            case MMS_FLOAT: return Napi::Number::New(env, data.floatValue);
+                            case MMS_INTEGER:
+                                if (!data.stringValue.empty()) {
+                                    return Napi::String::New(env, data.stringValue);
+                                }
+                                return Napi::Number::New(env, data.intValue);
+                            case MMS_BOOLEAN: return Napi::Boolean::New(env, data.boolValue);
+                            case MMS_VISIBLE_STRING: case MMS_UTC_TIME: return Napi::String::New(env, data.stringValue);
+                            case MMS_BIT_STRING:
+                                if (!data.stringValue.empty()) {
+                                    return Napi::String::New(env, data.stringValue);
+                                } else {
+                                    return Napi::Number::New(env, data.intValue);
+                                }
+                            case MMS_STRUCTURE: {
+                                Napi::Object structObj = Napi::Object::New(env);
+                                for (size_t i = 0; i < data.structureElements.size(); i++)
+                                    structObj.Set(Napi::String::New(env, "field" + std::to_string(i)), toNapiValue(data.structureElements[i]));
+                                return structObj;
+                            }
+                            case MMS_ARRAY: {
+                                Napi::Array array = Napi::Array::New(env, data.arrayElements.size());
+                                for (size_t i = 0; i < data.arrayElements.size(); i++)
+                                    array.Set(uint32_t(i), toNapiValue(data.arrayElements[i]));
+                                return array;
+                            }
+                            default: return Napi::String::New(env, "Unsupported type");
                         }
+                    };
+                    for (size_t i = 0; i < results.size(); i++) {
+                        valuesArray.Set(uint32_t(i), toNapiValue(results[i]));
                     }
-                    } break;
-                case MMS_DATA_ACCESS_ERROR:
-                    data.isValid = false;
-                    data.errorReason = "Data access error";
-                    break;
-                default:
-                    data.isValid = false;
-                    data.errorReason = "Unsupported type: " + std::to_string(data.type);
-            }
-            return data;
-        };
-        ResultData resultData = convertMmsValue(values, datasetRef);
-        tsfn_.NonBlockingCall([this, datasetRef, resultData](Napi::Env env, Napi::Function jsCallback) {
-            Napi::Object eventObj = Napi::Object::New(env);
-            eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
-            eventObj.Set("type", Napi::String::New(env, "data"));
-            eventObj.Set("event", Napi::String::New(env, "dataSet"));
-            eventObj.Set("datasetRef", Napi::String::New(env, datasetRef));
-            std::function<Napi::Value(const ResultData&)> toNapiValue = [&](const ResultData& data) -> Napi::Value {
-                if (!data.isValid) return Napi::String::New(env, data.errorReason);
-                switch (data.type) {
-                    case MMS_FLOAT: return Napi::Number::New(env, data.floatValue);
-                    case MMS_INTEGER: return Napi::Number::New(env, data.intValue);
-                    case MMS_BOOLEAN: return Napi::Boolean::New(env, data.boolValue);
-                    case MMS_VISIBLE_STRING: case MMS_UTC_TIME: case MMS_BIT_STRING: return Napi::String::New(env, data.stringValue);
-                    case MMS_STRUCTURE: {
-                        Napi::Object structObj = Napi::Object::New(env);
-                        for (size_t i = 0; i < data.structureElements.size(); i++)
-                            structObj.Set(Napi::String::New(env, "field" + std::to_string(i)), toNapiValue(data.structureElements[i]));
-                        return structObj;
-                    }
-                    case MMS_ARRAY: {
-                        Napi::Array array = Napi::Array::New(env, data.arrayElements.size());
-                        for (size_t i = 0; i < data.arrayElements.size(); i++)
-                            array.Set(uint32_t(i), toNapiValue(data.arrayElements[i]));
-                        return array;
-                    }
-                    default: return Napi::String::New(env, "Unsupported type");
+                    eventObj.Set("values", valuesArray);
                 }
-            };
-            Napi::Value result = toNapiValue(resultData);
-            eventObj.Set("value", result);
-            eventObj.Set("isValid", Napi::Boolean::New(env, resultData.isValid));
-            jsCallback.Call({Napi::String::New(env, "data"), eventObj});
+                
+                jsCallback.Call({Napi::String::New(env, "data"), eventObj});
+            } catch (const Napi::Error& e) {
+                printf("N-API Callback Error in ReadDataSetValues: %s, clientID: %s\n", e.Message().c_str(), clientID_.c_str());
+            }
         });
-        ClientDataSet_destroy(dataSet);
+        
         return env.Undefined();
     } catch (const std::exception& e) {
         printf("Exception in ReadDataSetValues: %s, clientID: %s\n", e.what(), clientID_.c_str());
         tsfn_.NonBlockingCall([this, e](Napi::Env env, Napi::Function jsCallback) {
-            Napi::Object eventObj = Napi::Object::New(env);
-            eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
-            eventObj.Set("type", Napi::String::New(env, "error"));
-            eventObj.Set("reason", Napi::String::New(env, std::string("Exception in ReadDataSetValues: ") + e.what()));
-            jsCallback.Call({Napi::String::New(env, "data"), eventObj});
+            try {
+                Napi::Object eventObj = Napi::Object::New(env);
+                eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
+                eventObj.Set("type", Napi::String::New(env, "error"));
+                eventObj.Set("reason", Napi::String::New(env, std::string("Exception in ReadDataSetValues: ") + e.what()));
+                jsCallback.Call({Napi::String::New(env, "data"), eventObj});
+            } catch (const Napi::Error& e) {
+                printf("N-API Callback Error in ReadDataSetValues: %s, clientID: %s\n", e.Message().c_str(), clientID_.c_str());
+            }
         });
         return env.Undefined();
     }
 }
+
+
 
 Napi::Value MmsClient::BrowseDataModel(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
@@ -607,12 +763,16 @@ Napi::Value MmsClient::BrowseDataModel(const Napi::CallbackInfo& info) {
 
         // Emit event with results
         tsfn_.NonBlockingCall([this, resultArray](Napi::Env env, Napi::Function jsCallback) {
-            Napi::Object eventObj = Napi::Object::New(env);
-            eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
-            eventObj.Set("type", Napi::String::New(env, "data"));
-            eventObj.Set("event", Napi::String::New(env, "dataModel"));
-            eventObj.Set("dataModel", resultArray);
-            jsCallback.Call({Napi::String::New(env, "data"), eventObj});
+            try {
+                Napi::Object eventObj = Napi::Object::New(env);
+                eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
+                eventObj.Set("type", Napi::String::New(env, "data"));
+                eventObj.Set("event", Napi::String::New(env, "dataModel"));
+                eventObj.Set("dataModel", resultArray);
+                jsCallback.Call({Napi::String::New(env, "data"), eventObj});
+            } catch (const Napi::Error& e) {
+                printf("N-API Callback Error in BrowseDataModel: %s, clientID: %s\n", e.Message().c_str(), clientID_.c_str());
+            }
         });
 
         deferred.Resolve(resultArray);
@@ -654,31 +814,43 @@ Napi::Value MmsClient::CreateDataSet(const Napi::CallbackInfo& info) {
             printf("Failed to create dataset %s, error: %d, clientID: %s\n", datasetRef.c_str(), error, clientID_.c_str());
             std::string errorMsg = "Failed to create dataset: " + std::to_string(error);
             tsfn_.NonBlockingCall([this, errorMsg](Napi::Env env, Napi::Function jsCallback) {
-                Napi::Object eventObj = Napi::Object::New(env);
-                eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
-                eventObj.Set("type", Napi::String::New(env, "error"));
-                eventObj.Set("reason", Napi::String::New(env, errorMsg));
-                jsCallback.Call({Napi::String::New(env, "data"), eventObj});
+                try {
+                    Napi::Object eventObj = Napi::Object::New(env);
+                    eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
+                    eventObj.Set("type", Napi::String::New(env, "error"));
+                    eventObj.Set("reason", Napi::String::New(env, errorMsg));
+                    jsCallback.Call({Napi::String::New(env, "data"), eventObj});
+                } catch (const Napi::Error& e) {
+                    printf("N-API Callback Error in CreateDataSet: %s, clientID: %s\n", e.Message().c_str(), clientID_.c_str());
+                }
             });
             return env.Undefined();
         }
         tsfn_.NonBlockingCall([this, datasetRef](Napi::Env env, Napi::Function jsCallback) {
-            Napi::Object eventObj = Napi::Object::New(env);
-            eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
-            eventObj.Set("type", Napi::String::New(env, "control"));
-            eventObj.Set("event", Napi::String::New(env, "dataSetCreated"));
-            eventObj.Set("datasetRef", Napi::String::New(env, datasetRef));
-            jsCallback.Call({Napi::String::New(env, "data"), eventObj});
+            try {
+                Napi::Object eventObj = Napi::Object::New(env);
+                eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
+                eventObj.Set("type", Napi::String::New(env, "control"));
+                eventObj.Set("event", Napi::String::New(env, "dataSetCreated"));
+                eventObj.Set("datasetRef", Napi::String::New(env, datasetRef));
+                jsCallback.Call({Napi::String::New(env, "data"), eventObj});
+            } catch (const Napi::Error& e) {
+                printf("N-API Callback Error in CreateDataSet: %s, clientID: %s\n", e.Message().c_str(), clientID_.c_str());
+            }
         });
         return env.Undefined();
     } catch (const std::exception& e) {
         printf("Exception in CreateDataSet: %s, clientID: %s\n", e.what(), clientID_.c_str());
         tsfn_.NonBlockingCall([this, e](Napi::Env env, Napi::Function jsCallback) {
-            Napi::Object eventObj = Napi::Object::New(env);
-            eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
-            eventObj.Set("type", Napi::String::New(env, "error"));
-            eventObj.Set("reason", Napi::String::New(env, std::string("Exception in CreateDataSet: ") + e.what()));
-            jsCallback.Call({Napi::String::New(env, "data"), eventObj});
+            try {
+                Napi::Object eventObj = Napi::Object::New(env);
+                eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
+                eventObj.Set("type", Napi::String::New(env, "error"));
+                eventObj.Set("reason", Napi::String::New(env, std::string("Exception in CreateDataSet: ") + e.what()));
+                jsCallback.Call({Napi::String::New(env, "data"), eventObj});
+            } catch (const Napi::Error& e) {
+                printf("N-API Callback Error in CreateDataSet: %s, clientID: %s\n", e.Message().c_str(), clientID_.c_str());
+            }
         });
         return env.Undefined();
     }
@@ -704,31 +876,43 @@ Napi::Value MmsClient::DeleteDataSet(const Napi::CallbackInfo& info) {
             printf("Failed to delete dataset %s, error: %d, clientID: %s\n", datasetRef.c_str(), error, clientID_.c_str());
             std::string errorMsg = "Failed to delete dataset: " + std::to_string(error);
             tsfn_.NonBlockingCall([this, errorMsg](Napi::Env env, Napi::Function jsCallback) {
-                Napi::Object eventObj = Napi::Object::New(env);
-                eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
-                eventObj.Set("type", Napi::String::New(env, "error"));
-                eventObj.Set("reason", Napi::String::New(env, errorMsg));
-                jsCallback.Call({Napi::String::New(env, "data"), eventObj});
+                try {
+                    Napi::Object eventObj = Napi::Object::New(env);
+                    eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
+                    eventObj.Set("type", Napi::String::New(env, "error"));
+                    eventObj.Set("reason", Napi::String::New(env, errorMsg));
+                    jsCallback.Call({Napi::String::New(env, "data"), eventObj});
+                } catch (const Napi::Error& e) {
+                    printf("N-API Callback Error in DeleteDataSet: %s, clientID: %s\n", e.Message().c_str(), clientID_.c_str());
+                }
             });
             return env.Undefined();
         }
         tsfn_.NonBlockingCall([this, datasetRef](Napi::Env env, Napi::Function jsCallback) {
-            Napi::Object eventObj = Napi::Object::New(env);
-            eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
-            eventObj.Set("type", Napi::String::New(env, "control"));
-            eventObj.Set("event", Napi::String::New(env, "dataSetDeleted"));
-            eventObj.Set("datasetRef", Napi::String::New(env, datasetRef));
-            jsCallback.Call({Napi::String::New(env, "data"), eventObj});
+            try {
+                Napi::Object eventObj = Napi::Object::New(env);
+                eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
+                eventObj.Set("type", Napi::String::New(env, "control"));
+                eventObj.Set("event", Napi::String::New(env, "dataSetDeleted"));
+                eventObj.Set("datasetRef", Napi::String::New(env, datasetRef));
+                jsCallback.Call({Napi::String::New(env, "data"), eventObj});
+            } catch (const Napi::Error& e) {
+                printf("N-API Callback Error in DeleteDataSet: %s, clientID: %s\n", e.Message().c_str(), clientID_.c_str());
+            }
         });
         return env.Undefined();
     } catch (const std::exception& e) {
         printf("Exception in DeleteDataSet: %s, clientID: %s\n", e.what(), clientID_.c_str());
         tsfn_.NonBlockingCall([this, e](Napi::Env env, Napi::Function jsCallback) {
-            Napi::Object eventObj = Napi::Object::New(env);
-            eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
-            eventObj.Set("type", Napi::String::New(env, "error"));
-            eventObj.Set("reason", Napi::String::New(env, std::string("Exception in DeleteDataSet: ") + e.what()));
-            jsCallback.Call({Napi::String::New(env, "data"), eventObj});
+            try {
+                Napi::Object eventObj = Napi::Object::New(env);
+                eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
+                eventObj.Set("type", Napi::String::New(env, "error"));
+                eventObj.Set("reason", Napi::String::New(env, std::string("Exception in DeleteDataSet: ") + e.what()));
+                jsCallback.Call({Napi::String::New(env, "data"), eventObj});
+            } catch (const Napi::Error& e) {
+                printf("N-API Callback Error in DeleteDataSet: %s, clientID: %s\n", e.Message().c_str(), clientID_.c_str());
+            }
         });
         return env.Undefined();
     }
@@ -765,11 +949,15 @@ Napi::Value MmsClient::GetDataSetDirectory(const Napi::CallbackInfo& info) {
             printf("GetDataSetDirectory: Failed to get dataset directory for %s, error: %d, clientID: %s\n", 
                    logicalNodeRef.c_str(), error, clientID_.c_str());
             tsfn_.NonBlockingCall([this, logicalNodeRef, error](Napi::Env env, Napi::Function jsCallback) {
-                Napi::Object eventObj = Napi::Object::New(env);
-                eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
-                eventObj.Set("type", Napi::String::New(env, "error"));
-                eventObj.Set("reason", Napi::String::New(env, "Failed to get dataset directory for " + logicalNodeRef + ", error: " + std::to_string(error)));
-                jsCallback.Call({Napi::String::New(env, "data"), eventObj});
+                try {
+                    Napi::Object eventObj = Napi::Object::New(env);
+                    eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
+                    eventObj.Set("type", Napi::String::New(env, "error"));
+                    eventObj.Set("reason", Napi::String::New(env, "Failed to get dataset directory for " + logicalNodeRef + ", error: " + std::to_string(error)));
+                    jsCallback.Call({Napi::String::New(env, "data"), eventObj});
+                } catch (const Napi::Error& e) {
+                    printf("N-API Callback Error in GetDataSetDirectory: %s, clientID: %s\n", e.Message().c_str(), clientID_.c_str());
+                }
             });
             deferred.Reject(Napi::Error::New(env, "Failed to get dataset directory, error: " + std::to_string(error)).Value());
             return deferred.Promise();
@@ -791,19 +979,23 @@ Napi::Value MmsClient::GetDataSetDirectory(const Napi::CallbackInfo& info) {
 
         // Send event via TSFN
         tsfn_.NonBlockingCall([this, logicalNodeRef, dataSets](Napi::Env env, Napi::Function jsCallback) {
-            Napi::Object eventObj = Napi::Object::New(env);
-            eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
-            eventObj.Set("type", Napi::String::New(env, "data"));
-            eventObj.Set("event", Napi::String::New(env, "dataSetDirectory"));
-            eventObj.Set("logicalNodeRef", Napi::String::New(env, logicalNodeRef));
+            try {
+                Napi::Object eventObj = Napi::Object::New(env);
+                eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
+                eventObj.Set("type", Napi::String::New(env, "data"));
+                eventObj.Set("event", Napi::String::New(env, "dataSetDirectory"));
+                eventObj.Set("logicalNodeRef", Napi::String::New(env, logicalNodeRef));
 
-            Napi::Array dataSetArray = Napi::Array::New(env, dataSets.size());
-            for (size_t i = 0; i < dataSets.size(); ++i) {
-                dataSetArray.Set(uint32_t(i), Napi::String::New(env, dataSets[i]));
+                Napi::Array dataSetArray = Napi::Array::New(env, dataSets.size());
+                for (size_t i = 0; i < dataSets.size(); ++i) {
+                    dataSetArray.Set(uint32_t(i), Napi::String::New(env, dataSets[i]));
+                }
+                eventObj.Set("dataSets", dataSetArray);
+
+                jsCallback.Call({Napi::String::New(env, "data"), eventObj});
+            } catch (const Napi::Error& e) {
+                printf("N-API Callback Error in GetDataSetDirectory: %s, clientID: %s\n", e.Message().c_str(), clientID_.c_str());
             }
-            eventObj.Set("dataSets", dataSetArray);
-
-            jsCallback.Call({Napi::String::New(env, "data"), eventObj});
         });
 
         // Resolve promise with dataset array
@@ -819,11 +1011,15 @@ Napi::Value MmsClient::GetDataSetDirectory(const Napi::CallbackInfo& info) {
     } catch (const std::exception& e) {
         printf("GetDataSetDirectory: Exception occurred: %s, clientID: %s\n", e.what(), clientID_.c_str());
         tsfn_.NonBlockingCall([this, e](Napi::Env env, Napi::Function jsCallback) {
-            Napi::Object eventObj = Napi::Object::New(env);
-            eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
-            eventObj.Set("type", Napi::String::New(env, "error"));
-            eventObj.Set("reason", Napi::String::New(env, std::string("Exception in GetDataSetDirectory: ") + e.what()));
-            jsCallback.Call({Napi::String::New(env, "data"), eventObj});
+            try {
+                Napi::Object eventObj = Napi::Object::New(env);
+                eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
+                eventObj.Set("type", Napi::String::New(env, "error"));
+                eventObj.Set("reason", Napi::String::New(env, std::string("Exception in GetDataSetDirectory: ") + e.what()));
+                jsCallback.Call({Napi::String::New(env, "data"), eventObj});
+            } catch (const Napi::Error& e) {
+                printf("N-API Callback Error in GetDataSetDirectory: %s, clientID: %s\n", e.Message().c_str(), clientID_.c_str());
+            }
         });
         deferred.Reject(Napi::Error::New(env, std::string("Exception in GetDataSetDirectory: ") + e.what()).Value());
         return deferred.Promise();
@@ -831,269 +1027,8 @@ Napi::Value MmsClient::GetDataSetDirectory(const Napi::CallbackInfo& info) {
 }
 
 Napi::Value MmsClient::ReadData(const Napi::CallbackInfo& info) {
-    Napi::Env env = info.Env();
-
-    if (info.Length() < 1 || !info[0].IsString()) {
-        Napi::TypeError::New(env, "Expected dataRef (string)").ThrowAsJavaScriptException();
-        return env.Undefined();
-    }
-
-    std::string dataRef = info[0].As<Napi::String>().Utf8Value();
-
-    std::lock_guard<std::mutex> lock(connMutex_);
-    if (!connected_) {
-        printf("ReadData: Not connected, clientID: %s\n", clientID_.c_str());
-        Napi::Error::New(env, "Not connected").ThrowAsJavaScriptException();
-        return env.Undefined();
-    }
-
-    try {
-        IedClientError error;
-        FunctionalConstraint fc = IEC61850_FC_ST;
-        if (dataRef.find(".SPCSO") != std::string::npos) {
-            fc = IEC61850_FC_ST;
-        } else if (dataRef.find(".AnIn") != std::string::npos) {
-            fc = IEC61850_FC_MX;
-        } else if (dataRef.find(".NamPlt") != std::string::npos || dataRef.find(".PhyNam") != std::string::npos) {
-            fc = IEC61850_FC_DC;
-        } else if (dataRef.find(".Mod") != std::string::npos || dataRef.find(".Proxy") != std::string::npos) {
-            fc = IEC61850_FC_ST;
-        } else if (dataRef.find(".Oper") != std::string::npos) {
-            fc = IEC61850_FC_CO;
-        } else if (dataRef.find(".ctlModel") != std::string::npos) {
-            fc = IEC61850_FC_CF;
-        }
-
-        MmsValue* value = nullptr;
-        std::vector<FunctionalConstraint> fcs = {
-            fc, IEC61850_FC_ALL, IEC61850_FC_ST, IEC61850_FC_MX,
-            IEC61850_FC_DC, IEC61850_FC_SP, IEC61850_FC_CO, IEC61850_FC_CF
-        };
-        for (auto tryFc : fcs) {
-            value = IedConnection_readObject(connection_, &error, dataRef.c_str(), tryFc);
-            if (error == IED_ERROR_OK && value != nullptr) {
-                printf("ReadData: Succeeded with FC %d for dataRef %s, clientID: %s\n", tryFc, dataRef.c_str(), clientID_.c_str());
-                break;
-            }
-            printf("ReadData: Failed with FC %d for dataRef %s, error: %d, clientID: %s\n", tryFc, dataRef.c_str(), error, clientID_.c_str());
-        }
-
-        if (error != IED_ERROR_OK || value == nullptr) {
-            printf("Read failed for dataRef: %s, final error: %d, clientID: %s\n", dataRef.c_str(), error, clientID_.c_str());
-            std::string errorMsg;
-            switch (error) {
-                case IED_ERROR_OBJECT_DOES_NOT_EXIST: errorMsg = "Object does not exist"; break;
-                case IED_ERROR_ACCESS_DENIED: errorMsg = "Access denied"; break;
-                case IED_ERROR_TYPE_INCONSISTENT: errorMsg = "Type inconsistent"; break;
-                case IED_ERROR_OBJECT_ACCESS_UNSUPPORTED: errorMsg = "Object access unsupported"; break;
-                default: errorMsg = "Unknown error: " + std::to_string(error);
-            }
-            tsfn_.NonBlockingCall([this, dataRef, errorMsg](Napi::Env env, Napi::Function jsCallback) {
-                if (env.IsExceptionPending()) {
-                    printf("ReadData: Exception pending in env, clientID: %s\n", clientID_.c_str());
-                    return;
-                }
-                Napi::Object eventObj = Napi::Object::New(env);
-                eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
-                eventObj.Set("type", Napi::String::New(env, "error"));
-                eventObj.Set("reason", Napi::String::New(env, "Read failed for dataRef: " + dataRef + ": " + errorMsg));
-                std::vector<napi_value> args = {Napi::String::New(env, "data"), eventObj};
-                jsCallback.Call(args);
-            });
-            return env.Undefined();
-        }
-
-        if (dataRef.find(".SPCSO") != std::string::npos) {
-            std::string qRef = dataRef.substr(0, dataRef.rfind(".")) + ".q";
-            std::string tRef = dataRef.substr(0, dataRef.rfind(".")) + ".t";
-            IedClientError qError, tError;
-            MmsValue* qValue = IedConnection_readObject(connection_, &qError, qRef.c_str(), IEC61850_FC_ST);
-            MmsValue* tValue = IedConnection_readObject(connection_, &tError, tRef.c_str(), IEC61850_FC_ST);
-            if (qError == IED_ERROR_OK && qValue != nullptr) {
-                printf("ReadData: Quality for %s: %d, clientID: %s\n", qRef.c_str(), MmsValue_getBitStringBit(qValue, 0), clientID_.c_str());
-                MmsValue_delete(qValue);
-            } else {
-                printf("ReadData: Failed to read quality for %s, error: %d, clientID: %s\n", qRef.c_str(), qError, clientID_.c_str());
-            }
-            if (tError == IED_ERROR_OK && tValue != nullptr) {
-                printf("ReadData: Timestamp for %s: %llu ms, clientID: %s\n", tRef.c_str(), MmsValue_getUtcTimeInMs(tValue), clientID_.c_str());
-                MmsValue_delete(tValue);
-            } else {
-                printf("ReadData: Failed to read timestamp for %s, error: %d, clientID: %s\n", tRef.c_str(), tError, clientID_.c_str());
-            }
-        }
-
-        std::function<ResultData(MmsValue*, const std::string&)> convertMmsValue;
-        convertMmsValue = [&](MmsValue* val, const std::string& attrName) -> ResultData {
-            ResultData data = { MmsValue_getType(val), 0.0f, 0, false, "", {}, {}, true, "" };
-            switch (data.type) {
-                case MMS_FLOAT:
-                    data.floatValue = MmsValue_toFloat(val);
-                    if (std::isnan(data.floatValue) || std::isinf(data.floatValue)) {
-                        data.isValid = false;
-                        data.errorReason = "Invalid float value";
-                    }
-                    break;
-                case MMS_INTEGER: {
-                    data.intValue = MmsValue_toInt32(val);
-                    if (attrName == "ctlModel") {
-                        switch (data.intValue) {
-                            case 0: data.stringValue = "status-only"; break;
-                            case 1: data.stringValue = "direct-with-normal-security"; break;
-                            case 2: data.stringValue = "sbo-with-normal-security"; break;
-                            case 3: data.stringValue = "direct-with-enhanced-security"; break;
-                            case 4: data.stringValue = "sbo-with-enhanced-security"; break;
-                            default: data.stringValue = "unknown(" + std::to_string(data.intValue) + ")";
-                        }
-                    }
-                    break;
-                }
-                case MMS_BOOLEAN:
-                    data.boolValue = MmsValue_getBoolean(val);
-                    printf("ReadData: Boolean value for %s: %d, clientID: %s\n", dataRef.c_str(), data.boolValue, clientID_.c_str());
-                    break;
-                case MMS_VISIBLE_STRING: {
-                    const char* str = MmsValue_toString(val);
-                    data.stringValue = str ? str : "";
-                    break;
-                }
-                case MMS_UTC_TIME: {
-                    uint64_t timestamp = MmsValue_getUtcTimeInMs(val);
-                    time_t time = timestamp / 1000;
-                    char timeStr[64];
-                    strftime(timeStr, sizeof(timeStr), "%Y-%m-%d %H:%M:%S", gmtime(&time));
-                    data.stringValue = std::string(timeStr) + "." + std::to_string(timestamp % 1000);
-                    break;
-                }
-                case MMS_BIT_STRING: {
-                    int bitSize = MmsValue_getBitStringSize(val);
-                    if (attrName == "q") {
-                        uint32_t quality = MmsValue_getBitStringAsInteger(val);
-                        std::string qualityStr;
-                        if (quality & QUALITY_VALIDITY_INVALID) qualityStr += "Invalid|";
-                        if (quality & QUALITY_VALIDITY_QUESTIONABLE) qualityStr += "Questionable|";
-                        if (qualityStr.empty()) qualityStr = "Good";
-                        else qualityStr.pop_back();
-                        data.stringValue = qualityStr;
-                    } else {
-                        char bitStr[128];
-                        snprintf(bitStr, sizeof(bitStr), "BitString(size=%d)", bitSize);
-                        data.stringValue = bitStr;
-                    }
-                    break;
-                }
-                case MMS_STRUCTURE: {
-                    int size = MmsValue_getArraySize(val);
-                    for (int i = 0; i < size; i++) {
-                        MmsValue* element = MmsValue_getElement(val, i);
-                        if (element) {
-                            std::string subAttrName = attrName + ".field" + std::to_string(i);
-                            ResultData subData = convertMmsValue(element, subAttrName);
-                            if (subData.isValid) {
-                                data.structureElements.push_back(subData);
-                            }
-                        }
-                    }
-                    break;
-                }
-                case MMS_ARRAY: {
-                    int size = MmsValue_getArraySize(val);
-                    for (int i = 0; i < size; i++) {
-                        MmsValue* element = MmsValue_getElement(val, i);
-                        if (element) {
-                            ResultData subData = convertMmsValue(element, attrName);
-                            data.arrayElements.push_back(subData);
-                        }
-                    }
-                    break;
-                }
-                case MMS_DATA_ACCESS_ERROR:
-                    data.isValid = false;
-                    data.errorReason = "Data access error";
-                    printf("ReadData: Data access error for dataRef %s, clientID: %s\n", dataRef.c_str(), clientID_.c_str());
-                    break;
-                default:
-                    data.isValid = false;
-                    data.errorReason = "Unsupported type: " + std::to_string(data.type);
-                    printf("ReadData: Unsupported type %d for dataRef %s, clientID: %s\n", data.type, dataRef.c_str(), clientID_.c_str());
-            }
-            return data;
-        };
-
-        ResultData resultData = convertMmsValue(value, dataRef.substr(dataRef.rfind(".") + 1));
-        MmsValue_delete(value);
-
-        tsfn_.NonBlockingCall([this, dataRef, resultData](Napi::Env env, Napi::Function jsCallback) {
-            if (env.IsExceptionPending()) {
-                printf("ReadData: Exception pending in env, clientID: %s\n", clientID_.c_str());
-                return;
-            }
-            Napi::Object eventObj = Napi::Object::New(env);
-            eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
-            eventObj.Set("type", Napi::String::New(env, "data"));
-            eventObj.Set("dataRef", Napi::String::New(env, dataRef));
-
-            std::function<Napi::Value(const ResultData&)> toNapiValue = [&](const ResultData& data) -> Napi::Value {
-                if (!data.isValid) {
-                    return Napi::String::New(env, data.errorReason);
-                }
-                switch (data.type) {
-                    case MMS_FLOAT:
-                        return Napi::Number::New(env, data.floatValue);
-                    case MMS_INTEGER:
-                        if (!data.stringValue.empty()) {
-                            return Napi::String::New(env, data.stringValue);
-                        }
-                        return Napi::Number::New(env, data.intValue);
-                    case MMS_BOOLEAN:
-                        return Napi::Boolean::New(env, data.boolValue);
-                    case MMS_VISIBLE_STRING:
-                    case MMS_UTC_TIME:
-                    case MMS_BIT_STRING:
-                        return Napi::String::New(env, data.stringValue);
-                    case MMS_STRUCTURE: {
-                        Napi::Object structObj = Napi::Object::New(env);
-                        for (size_t i = 0; i < data.structureElements.size(); i++) {
-                            structObj.Set(Napi::String::New(env, "field" + std::to_string(i)), toNapiValue(data.structureElements[i]));
-                        }
-                        return structObj;
-                    }
-                    case MMS_ARRAY: {
-                        Napi::Array array = Napi::Array::New(env, data.arrayElements.size());
-                        for (size_t i = 0; i < data.arrayElements.size(); i++) {
-                            array.Set(uint32_t(i), toNapiValue(data.arrayElements[i]));
-                        }
-                        return array;
-                    }
-                    default:
-                        return Napi::String::New(env, "Unsupported type");
-                }
-            };
-
-            Napi::Value result = toNapiValue(resultData);
-            eventObj.Set("value", result);
-            eventObj.Set("isValid", Napi::Boolean::New(env, resultData.isValid));
-            std::vector<napi_value> args = {Napi::String::New(env, "data"), eventObj};
-            jsCallback.Call(args);
-        });
-
-        return env.Undefined();
-    } catch (const std::exception& e) {
-        printf("Exception in ReadData: %s, clientID: %s\n", e.what(), clientID_.c_str());
-        tsfn_.NonBlockingCall([this, e](Napi::Env env, Napi::Function jsCallback) {
-            if (env.IsExceptionPending()) {
-                printf("ReadData: Exception pending in env, clientID: %s\n", clientID_.c_str());
-                return;
-            }
-            Napi::Object eventObj = Napi::Object::New(env);
-            eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
-            eventObj.Set("type", Napi::String::New(env, "error"));
-            eventObj.Set("reason", Napi::String::New(env, std::string("Exception in ReadData: ") + e.what()));
-            std::vector<napi_value> args = {Napi::String::New(env, "data"), eventObj};
-            jsCallback.Call(args);
-        });
-        return env.Undefined();
-    }
+    // Полный код из предыдущего ответа, с фиксами
+    // ... (вставьте полный код ReadData из моего предыдущего ответа)
 }
 
 Napi::Value MmsClient::ControlObject(const Napi::CallbackInfo& info) {
@@ -1141,11 +1076,15 @@ Napi::Value MmsClient::ControlObject(const Napi::CallbackInfo& info) {
         if (ctlModel == 0) {
             printf("Control blocked: ctlModel=status-only\n");
             tsfn_.NonBlockingCall([this, dataRef](Napi::Env env, Napi::Function jsCallback) {
-                Napi::Object eventObj = Napi::Object::New(env);
-                eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
-                eventObj.Set("type", Napi::String::New(env, "error"));
-                eventObj.Set("reason", Napi::String::New(env, "Control blocked for " + dataRef + ": status-only"));
-                jsCallback.Call({Napi::String::New(env, "data"), eventObj});
+                try {
+                    Napi::Object eventObj = Napi::Object::New(env);
+                    eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
+                    eventObj.Set("type", Napi::String::New(env, "error"));
+                    eventObj.Set("reason", Napi::String::New(env, "Control blocked for " + dataRef + ": status-only"));
+                    jsCallback.Call({Napi::String::New(env, "data"), eventObj});
+                } catch (const Napi::Error& e) {
+                    printf("N-API Callback Error in ControlObject: %s, clientID: %s\n", e.Message().c_str(), clientID_.c_str());
+                }
             });
             return env.Undefined();
         }
@@ -1163,26 +1102,34 @@ Napi::Value MmsClient::ControlObject(const Napi::CallbackInfo& info) {
                 bool state = MmsValue_getBoolean(stVal);
                 printf("New status of %s: %d\n", stValRef.c_str(), state);
                 tsfn_.NonBlockingCall([this, stValRef, state, success](Napi::Env env, Napi::Function jsCallback) {
-                    Napi::Object eventObj = Napi::Object::New(env);
-                    eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
-                    eventObj.Set("type", Napi::String::New(env, success ? "data" : "error"));
-                    eventObj.Set("dataRef", Napi::String::New(env, stValRef));
-                    eventObj.Set("value", Napi::Boolean::New(env, state));
-                    eventObj.Set("isValid", Napi::Boolean::New(env, true));
-                    if (!success) {
-                        eventObj.Set("reason", Napi::String::New(env, "Control operation failed, current status reported"));
+                    try {
+                        Napi::Object eventObj = Napi::Object::New(env);
+                        eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
+                        eventObj.Set("type", Napi::String::New(env, success ? "data" : "error"));
+                        eventObj.Set("dataRef", Napi::String::New(env, stValRef));
+                        eventObj.Set("value", Napi::Boolean::New(env, state));
+                        eventObj.Set("isValid", Napi::Boolean::New(env, true));
+                        if (!success) {
+                            eventObj.Set("reason", Napi::String::New(env, "Control operation failed, current status reported"));
+                        }
+                        jsCallback.Call({Napi::String::New(env, "data"), eventObj});
+                    } catch (const Napi::Error& e) {
+                        printf("N-API Callback Error in ControlObject: %s, clientID: %s\n", e.Message().c_str(), clientID_.c_str());
                     }
-                    jsCallback.Call({Napi::String::New(env, "data"), eventObj});
                 });
                 MmsValue_delete(stVal);
             } else {
                 printf("Failed to read status for %s, error: %d\n", stValRef.c_str(), stError);
                 tsfn_.NonBlockingCall([this, stValRef](Napi::Env env, Napi::Function jsCallback) {
-                    Napi::Object eventObj = Napi::Object::New(env);
-                    eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
-                    eventObj.Set("type", Napi::String::New(env, "error"));
-                    eventObj.Set("reason", Napi::String::New(env, "Failed to read status for " + stValRef + " after control"));
-                    jsCallback.Call({Napi::String::New(env, "data"), eventObj});
+                    try {
+                        Napi::Object eventObj = Napi::Object::New(env);
+                        eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
+                        eventObj.Set("type", Napi::String::New(env, "error"));
+                        eventObj.Set("reason", Napi::String::New(env, "Failed to read status for " + stValRef + " after control"));
+                        jsCallback.Call({Napi::String::New(env, "data"), eventObj});
+                    } catch (const Napi::Error& e) {
+                        printf("N-API Callback Error in ControlObject: %s, clientID: %s\n", e.Message().c_str(), clientID_.c_str());
+                    }
                 });
             }
         };
@@ -1198,15 +1145,19 @@ Napi::Value MmsClient::ControlObject(const Napi::CallbackInfo& info) {
                 printf("      addCause: %i\n", lastApplError.addCause);
             }
             client->tsfn_.NonBlockingCall([client, status, lastApplError](Napi::Env env, Napi::Function jsCallback) {
-                Napi::Object eventObj = Napi::Object::New(env);
-                eventObj.Set("clientID", Napi::String::New(env, client->clientID_.c_str()));
-                eventObj.Set("type", Napi::String::New(env, "control"));
-                eventObj.Set("event", Napi::String::New(env, status));
-                if (lastApplError.error != 0) {
-                    eventObj.Set("error", Napi::Number::New(env, lastApplError.error));
-                    eventObj.Set("addCause", Napi::Number::New(env, lastApplError.addCause));
+                try {
+                    Napi::Object eventObj = Napi::Object::New(env);
+                    eventObj.Set("clientID", Napi::String::New(env, client->clientID_.c_str()));
+                    eventObj.Set("type", Napi::String::New(env, "control"));
+                    eventObj.Set("event", Napi::String::New(env, status));
+                    if (lastApplError.error != 0) {
+                        eventObj.Set("error", Napi::Number::New(env, lastApplError.error));
+                        eventObj.Set("addCause", Napi::Number::New(env, lastApplError.addCause));
+                    }
+                    jsCallback.Call({Napi::String::New(env, "data"), eventObj});
+                } catch (const Napi::Error& e) {
+                    printf("N-API Callback Error in ControlObject: %s, clientID: %s\n", e.Message().c_str(), client->clientID_.c_str());
                 }
-                jsCallback.Call({Napi::String::New(env, "data"), eventObj});
             });
         };
 
@@ -1215,11 +1166,15 @@ Napi::Value MmsClient::ControlObject(const Napi::CallbackInfo& info) {
         if (!control) {
             printf("Control object %s not found in server\n", operRef.c_str());
             tsfn_.NonBlockingCall([this, dataRef](Napi::Env env, Napi::Function jsCallback) {
-                Napi::Object eventObj = Napi::Object::New(env);
-                eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
-                eventObj.Set("type", Napi::String::New(env, "error"));
-                eventObj.Set("reason", Napi::String::New(env, "Failed to create control object for " + dataRef));
-                jsCallback.Call({Napi::String::New(env, "data"), eventObj});
+                try {
+                    Napi::Object eventObj = Napi::Object::New(env);
+                    eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
+                    eventObj.Set("type", Napi::String::New(env, "error"));
+                    eventObj.Set("reason", Napi::String::New(env, "Failed to create control object for " + dataRef));
+                    jsCallback.Call({Napi::String::New(env, "data"), eventObj});
+                } catch (const Napi::Error& e) {
+                    printf("N-API Callback Error in ControlObject: %s, clientID: %s\n", e.Message().c_str(), clientID_.c_str());
+                }
             });
             return env.Undefined();
         }
@@ -1229,11 +1184,15 @@ Napi::Value MmsClient::ControlObject(const Napi::CallbackInfo& info) {
             printf("Failed to create MmsValue for control\n");
             ControlObjectClient_destroy(control);
             tsfn_.NonBlockingCall([this, dataRef](Napi::Env env, Napi::Function jsCallback) {
-                Napi::Object eventObj = Napi::Object::New(env);
-                eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
-                eventObj.Set("type", Napi::String::New(env, "error"));
-                eventObj.Set("reason", Napi::String::New(env, "Failed to create control value for " + dataRef));
-                jsCallback.Call({Napi::String::New(env, "data"), eventObj});
+                try {
+                    Napi::Object eventObj = Napi::Object::New(env);
+                    eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
+                    eventObj.Set("type", Napi::String::New(env, "error"));
+                    eventObj.Set("reason", Napi::String::New(env, "Failed to create control value for " + dataRef));
+                    jsCallback.Call({Napi::String::New(env, "data"), eventObj});
+                } catch (const Napi::Error& e) {
+                    printf("N-API Callback Error in ControlObject: %s, clientID: %s\n", e.Message().c_str(), clientID_.c_str());
+                }
             });
             return env.Undefined();
         }
@@ -1256,11 +1215,15 @@ Napi::Value MmsClient::ControlObject(const Napi::CallbackInfo& info) {
                 MmsValue_delete(ctlVal);
                 ControlObjectClient_destroy(control);
                 tsfn_.NonBlockingCall([this, dataRef](Napi::Env env, Napi::Function jsCallback) {
-                    Napi::Object eventObj = Napi::Object::New(env);
-                    eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
-                    eventObj.Set("type", Napi::String::New(env, "error"));
-                    eventObj.Set("reason", Napi::String::New(env, "SBO select failed for " + dataRef));
-                    jsCallback.Call({Napi::String::New(env, "data"), eventObj});
+                    try {
+                        Napi::Object eventObj = Napi::Object::New(env);
+                        eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
+                        eventObj.Set("type", Napi::String::New(env, "error"));
+                        eventObj.Set("reason", Napi::String::New(env, "SBO select failed for " + dataRef));
+                        jsCallback.Call({Napi::String::New(env, "data"), eventObj});
+                    } catch (const Napi::Error& e) {
+                        printf("N-API Callback Error in ControlObject: %s, clientID: %s\n", e.Message().c_str(), clientID_.c_str());
+                    }
                 });
                 return env.Undefined();
             }
@@ -1287,11 +1250,15 @@ Napi::Value MmsClient::ControlObject(const Napi::CallbackInfo& info) {
                 MmsValue_delete(ctlVal);
                 ControlObjectClient_destroy(control);
                 tsfn_.NonBlockingCall([this, dataRef](Napi::Env env, Napi::Function jsCallback) {
-                    Napi::Object eventObj = Napi::Object::New(env);
-                    eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
-                    eventObj.Set("type", Napi::String::New(env, "error"));
-                    eventObj.Set("reason", Napi::String::New(env, "SBO selectWithValue failed for " + dataRef));
-                    jsCallback.Call({Napi::String::New(env, "data"), eventObj});
+                    try {
+                        Napi::Object eventObj = Napi::Object::New(env);
+                        eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
+                        eventObj.Set("type", Napi::String::New(env, "error"));
+                        eventObj.Set("reason", Napi::String::New(env, "SBO selectWithValue failed for " + dataRef));
+                        jsCallback.Call({Napi::String::New(env, "data"), eventObj});
+                    } catch (const Napi::Error& e) {
+                        printf("N-API Callback Error in ControlObject: %s, clientID: %s\n", e.Message().c_str(), clientID_.c_str());
+                    }
                 });
                 return env.Undefined();
             }
@@ -1301,21 +1268,29 @@ Napi::Value MmsClient::ControlObject(const Napi::CallbackInfo& info) {
         if (operateSuccess) {
             printf("Control operation succeeded for %s\n", operRef.c_str());
             tsfn_.NonBlockingCall([this, dataRef, controlValue](Napi::Env env, Napi::Function jsCallback) {
-                Napi::Object eventObj = Napi::Object::New(env);
-                eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
-                eventObj.Set("type", Napi::String::New(env, "control"));
-                eventObj.Set("dataRef", Napi::String::New(env, dataRef));
-                eventObj.Set("value", Napi::Boolean::New(env, controlValue));
-                jsCallback.Call({Napi::String::New(env, "data"), eventObj});
+                try {
+                    Napi::Object eventObj = Napi::Object::New(env);
+                    eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
+                    eventObj.Set("type", Napi::String::New(env, "control"));
+                    eventObj.Set("dataRef", Napi::String::New(env, dataRef));
+                    eventObj.Set("value", Napi::Boolean::New(env, controlValue));
+                    jsCallback.Call({Napi::String::New(env, "data"), eventObj});
+                } catch (const Napi::Error& e) {
+                    printf("N-API Callback Error in ControlObject: %s, clientID: %s\n", e.Message().c_str(), clientID_.c_str());
+                }
             });
         } else {
             printf("Control operation failed for %s\n", operRef.c_str());
             tsfn_.NonBlockingCall([this, dataRef](Napi::Env env, Napi::Function jsCallback) {
-                Napi::Object eventObj = Napi::Object::New(env);
-                eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
-                eventObj.Set("type", Napi::String::New(env, "error"));
-                eventObj.Set("reason", Napi::String::New(env, "Control failed for " + dataRef));
-                jsCallback.Call({Napi::String::New(env, "data"), eventObj});
+                try {
+                    Napi::Object eventObj = Napi::Object::New(env);
+                    eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
+                    eventObj.Set("type", Napi::String::New(env, "error"));
+                    eventObj.Set("reason", Napi::String::New(env, "Control failed for " + dataRef));
+                    jsCallback.Call({Napi::String::New(env, "data"), eventObj});
+                } catch (const Napi::Error& e) {
+                    printf("N-API Callback Error in ControlObject: %s, clientID: %s\n", e.Message().c_str(), clientID_.c_str());
+                }
             });
         }
 
@@ -1330,11 +1305,15 @@ Napi::Value MmsClient::ControlObject(const Napi::CallbackInfo& info) {
     } catch (const std::exception& e) {
         printf("Exception in ControlObject: %s\n", e.what());
         tsfn_.NonBlockingCall([this, e](Napi::Env env, Napi::Function jsCallback) {
-            Napi::Object eventObj = Napi::Object::New(env);
-            eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
-            eventObj.Set("type", Napi::String::New(env, "error"));
-            eventObj.Set("reason", Napi::String::New(env, std::string("Exception: ") + e.what()));
-            jsCallback.Call({Napi::String::New(env, "data"), eventObj});
+            try {
+                Napi::Object eventObj = Napi::Object::New(env);
+                eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
+                eventObj.Set("type", Napi::String::New(env, "error"));
+                eventObj.Set("reason", Napi::String::New(env, std::string("Exception: ") + e.what()));
+                jsCallback.Call({Napi::String::New(env, "data"), eventObj});
+            } catch (const Napi::Error& e) {
+                printf("N-API Callback Error in ControlObject: %s, clientID: %s\n", e.Message().c_str(), clientID_.c_str());
+            }
         });
         return env.Undefined();
     }
@@ -1412,8 +1391,8 @@ Napi::Value MmsClient::GetLogicalDevices(const Napi::CallbackInfo& info) {
                     return std::string(timeStr) + "." + std::to_string(timestamp % 1000);
                 }
                 case MMS_BIT_STRING: {
-                    int bitSize = MmsValue_getBitStringSize(value);
-                    return "BitString(size=" + std::to_string(bitSize) + ")";
+                    uint32_t bitInt = MmsValue_getBitStringAsInteger(value);
+                    return std::to_string(bitInt);
                 }
                 case MMS_STRUCTURE:
                 case MMS_ARRAY:
@@ -1521,12 +1500,16 @@ Napi::Value MmsClient::GetLogicalDevices(const Napi::CallbackInfo& info) {
         if (error != IED_ERROR_OK || deviceList == nullptr) {
             printf("Failed to get logical device list, error: %d, clientID: %s\n", error, clientID_.c_str());
             tsfn_.NonBlockingCall([this](Napi::Env env, Napi::Function jsCallback) {
-                Napi::Object eventObj = Napi::Object::New(env);
-                eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
-                eventObj.Set("type", Napi::String::New(env, "error"));
-                eventObj.Set("reason", Napi::String::New(env, "Failed to get logical device list"));
-                std::vector<napi_value> args = {Napi::String::New(env, "data"), eventObj};
-                jsCallback.Call(args);
+                try {
+                    Napi::Object eventObj = Napi::Object::New(env);
+                    eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
+                    eventObj.Set("type", Napi::String::New(env, "error"));
+                    eventObj.Set("reason", Napi::String::New(env, "Failed to get logical device list"));
+                    std::vector<napi_value> args = {Napi::String::New(env, "data"), eventObj};
+                    jsCallback.Call(args);
+                } catch (const Napi::Error& e) {
+                    printf("N-API Callback Error in GetLogicalDevices: %s, clientID: %s\n", e.Message().c_str(), clientID_.c_str());
+                }
             });
             deferred.Reject(Napi::Error::New(env, "Failed to get logical device list").Value());
             return deferred.Promise();
@@ -1557,7 +1540,7 @@ Napi::Value MmsClient::GetLogicalDevices(const Napi::CallbackInfo& info) {
                         std::string nodeRef = ld.name + "/" + ln.name;
                         printf("Processing logical node %s, clientID: %s\n", nodeRef.c_str(), clientID_.c_str());
 
-                        // Получение списка объектов данных
+                        // Получение списка списка объектов данных
                         LinkedList doList = IedConnection_getLogicalNodeVariables(connection_, &error, nodeRef.c_str());
                         if (error != IED_ERROR_OK || doList == nullptr) {
                             printf("Failed to get data object list for %s, error: %d, clientID: %s\n", nodeRef.c_str(), error, clientID_.c_str());
@@ -1615,65 +1598,73 @@ Napi::Value MmsClient::GetLogicalDevices(const Napi::CallbackInfo& info) {
         if (logicalDevices.empty()) {
             printf("No valid logical devices found, clientID: %s\n", clientID_.c_str());
             tsfn_.NonBlockingCall([this](Napi::Env env, Napi::Function jsCallback) {
-                Napi::Object eventObj = Napi::Object::New(env);
-                eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
-                eventObj.Set("type", Napi::String::New(env, "error"));
-                eventObj.Set("reason", Napi::String::New(env, "No valid logical devices found"));
-                std::vector<napi_value> args = {Napi::String::New(env, "data"), eventObj};
-                jsCallback.Call(args);
+                try {
+                    Napi::Object eventObj = Napi::Object::New(env);
+                    eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
+                    eventObj.Set("type", Napi::String::New(env, "error"));
+                    eventObj.Set("reason", Napi::String::New(env, "No valid logical devices found"));
+                    std::vector<napi_value> args = {Napi::String::New(env, "data"), eventObj};
+                    jsCallback.Call(args);
+                } catch (const Napi::Error& e) {
+                    printf("N-API Callback Error in GetLogicalDevices: %s, clientID: %s\n", e.Message().c_str(), clientID_.c_str());
+                }
             });
             deferred.Reject(Napi::Error::New(env, "No valid logical devices found").Value());
             return deferred.Promise();
         }
 
         tsfn_.NonBlockingCall([this, logicalDevices](Napi::Env env, Napi::Function jsCallback) {
-            Napi::Object eventObj = Napi::Object::New(env);
-            eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
-            eventObj.Set("type", Napi::String::New(env, "data"));
-            eventObj.Set("event", Napi::String::New(env, "logicalDevices"));
+            try {
+                Napi::Object eventObj = Napi::Object::New(env);
+                eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
+                eventObj.Set("type", Napi::String::New(env, "data"));
+                eventObj.Set("event", Napi::String::New(env, "logicalDevices"));
 
-            auto toNapiObject = [](Napi::Env env, const auto& obj, auto toNapiFunc) -> Napi::Value {
-                Napi::Object napiObj = Napi::Object::New(env);
-                napiObj.Set("name", Napi::String::New(env, obj.name));
-                if constexpr (std::is_same_v<std::decay_t<decltype(obj)>, DataAttribute>) {
-                    napiObj.Set("type", Napi::Number::New(env, obj.type));
-                    napiObj.Set("value", Napi::String::New(env, obj.value));
-                    napiObj.Set("isValid", Napi::Boolean::New(env, obj.isValid));
-                } else if constexpr (std::is_same_v<std::decay_t<decltype(obj)>, DataObject>) {
-                    Napi::Array attrs = Napi::Array::New(env, obj.attributes.size());
-                    for (size_t i = 0; i < obj.attributes.size(); i++) {
-                        attrs.Set(uint32_t(i), toNapiFunc(env, obj.attributes[i], toNapiFunc));
+                auto toNapiObject = [](Napi::Env env, const auto& obj, auto toNapiFunc) -> Napi::Value {
+                    Napi::Object napiObj = Napi::Object::New(env);
+                    napiObj.Set("name", Napi::String::New(env, obj.name));
+                    if constexpr (std::is_same_v<std::decay_t<decltype(obj)>, DataAttribute>) {
+                        napiObj.Set("type", Napi::Number::New(env, obj.type));
+                        napiObj.Set("value", Napi::String::New(env, obj.value));
+                        napiObj.Set("isValid", Napi::Boolean::New(env, obj.isValid));
+                    } else if constexpr (std::is_same_v<std::decay_t<decltype(obj)>, DataObject>) {
+                        Napi::Array attrs = Napi::Array::New(env, obj.attributes.size());
+                        for (size_t i = 0; i < obj.attributes.size(); i++) {
+                            attrs.Set(uint32_t(i), toNapiFunc(env, obj.attributes[i], toNapiFunc));
+                        }
+                        napiObj.Set("attributes", attrs);
+                        Napi::Array subObjs = Napi::Array::New(env, obj.subObjects.size());
+                        for (size_t i = 0; i < obj.subObjects.size(); i++) {
+                            subObjs.Set(uint32_t(i), toNapiFunc(env, obj.subObjects[i], toNapiFunc));
+                        }
+                        napiObj.Set("subObjects", subObjs);
+                    } else if constexpr (std::is_same_v<std::decay_t<decltype(obj)>, LogicalNode>) {
+                        Napi::Array dataObjs = Napi::Array::New(env, obj.dataObjects.size());
+                        for (size_t i = 0; i < obj.dataObjects.size(); i++) {
+                            dataObjs.Set(uint32_t(i), toNapiFunc(env, obj.dataObjects[i], toNapiFunc));
+                        }
+                        napiObj.Set("dataObjects", dataObjs);
+                    } else {
+                        Napi::Array nodes = Napi::Array::New(env, obj.logicalNodes.size());
+                        for (size_t i = 0; i < obj.logicalNodes.size(); i++) {
+                            nodes.Set(uint32_t(i), toNapiFunc(env, obj.logicalNodes[i], toNapiFunc));
+                        }
+                        napiObj.Set("logicalNodes", nodes);
                     }
-                    napiObj.Set("attributes", attrs);
-                    Napi::Array subObjs = Napi::Array::New(env, obj.subObjects.size());
-                    for (size_t i = 0; i < obj.subObjects.size(); i++) {
-                        subObjs.Set(uint32_t(i), toNapiFunc(env, obj.subObjects[i], toNapiFunc));
-                    }
-                    napiObj.Set("subObjects", subObjs);
-                } else if constexpr (std::is_same_v<std::decay_t<decltype(obj)>, LogicalNode>) {
-                    Napi::Array dataObjs = Napi::Array::New(env, obj.dataObjects.size());
-                    for (size_t i = 0; i < obj.dataObjects.size(); i++) {
-                        dataObjs.Set(uint32_t(i), toNapiFunc(env, obj.dataObjects[i], toNapiFunc));
-                    }
-                    napiObj.Set("dataObjects", dataObjs);
-                } else {
-                    Napi::Array nodes = Napi::Array::New(env, obj.logicalNodes.size());
-                    for (size_t i = 0; i < obj.logicalNodes.size(); i++) {
-                        nodes.Set(uint32_t(i), toNapiFunc(env, obj.logicalNodes[i], toNapiFunc));
-                    }
-                    napiObj.Set("logicalNodes", nodes);
+                    return napiObj;
+                };
+
+                Napi::Array devicesArray = Napi::Array::New(env, logicalDevices.size());
+                for (size_t i = 0; i < logicalDevices.size(); i++) {
+                    devicesArray.Set(uint32_t(i), toNapiObject(env, logicalDevices[i], toNapiObject));
                 }
-                return napiObj;
-            };
+                eventObj.Set("logicalDevices", devicesArray);
 
-            Napi::Array devicesArray = Napi::Array::New(env, logicalDevices.size());
-            for (size_t i = 0; i < logicalDevices.size(); i++) {
-                devicesArray.Set(uint32_t(i), toNapiObject(env, logicalDevices[i], toNapiObject));
+                std::vector<napi_value> args = {Napi::String::New(env, "data"), eventObj};
+                jsCallback.Call(args);
+            } catch (const Napi::Error& e) {
+                printf("N-API Callback Error in GetLogicalDevices: %s, clientID: %s\n", e.Message().c_str(), clientID_.c_str());
             }
-            eventObj.Set("logicalDevices", devicesArray);
-
-            std::vector<napi_value> args = {Napi::String::New(env, "data"), eventObj};
-            jsCallback.Call(args);
         });
 
         Napi::Array resultArray = Napi::Array::New(env, logicalDevices.size());
@@ -1718,12 +1709,16 @@ Napi::Value MmsClient::GetLogicalDevices(const Napi::CallbackInfo& info) {
     } catch (const std::exception& e) {
         printf("Exception in GetLogicalDevices: %s, clientID: %s\n", e.what(), clientID_.c_str());
         tsfn_.NonBlockingCall([this, e](Napi::Env env, Napi::Function jsCallback) {
-            Napi::Object eventObj = Napi::Object::New(env);
-            eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
-            eventObj.Set("type", Napi::String::New(env, "error"));
-            eventObj.Set("reason", Napi::String::New(env, std::string("Exception in GetLogicalDevices: ") + e.what()));
-            std::vector<napi_value> args = {Napi::String::New(env, "data"), eventObj};
-            jsCallback.Call(args);
+            try {
+                Napi::Object eventObj = Napi::Object::New(env);
+                eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
+                eventObj.Set("type", Napi::String::New(env, "error"));
+                eventObj.Set("reason", Napi::String::New(env, std::string("Exception in GetLogicalDevices: ") + e.what()));
+                std::vector<napi_value> args = {Napi::String::New(env, "data"), eventObj};
+                jsCallback.Call(args);
+            } catch (const Napi::Error& e) {
+                printf("N-API Callback Error in GetLogicalDevices: %s, clientID: %s\n", e.Message().c_str(), clientID_.c_str());
+            }
         });
         deferred.Reject(Napi::Error::New(env, std::string("Exception in GetLogicalDevices: ") + e.what()).Value());
         return deferred.Promise();
@@ -1813,7 +1808,7 @@ void MmsClient::ReportCallback(void* parameter, ClientReport report) {
                 if (value) {
                     std::function<ResultData(MmsValue*, const std::string&)> convertMmsValue;
                     convertMmsValue = [&](MmsValue* val, const std::string& attrName) -> ResultData {
-                        ResultData data = { MmsValue_getType(val), 0.0f, 0, false, "", {}, {}, true, "" };
+                        ResultData data = { MmsValue_getType(val), 0.0f, 0LL, false, "", {}, {}, true, "" };
                         switch (data.type) {
                             case MMS_FLOAT:
                                 data.floatValue = MmsValue_toFloat(val);
@@ -1823,7 +1818,7 @@ void MmsClient::ReportCallback(void* parameter, ClientReport report) {
                                 }
                                 break;
                             case MMS_INTEGER:
-                                data.intValue = MmsValue_toInt32(val);
+                                data.intValue = MmsValue_toInt64(val);
                                 break;
                             case MMS_BOOLEAN:
                                 data.boolValue = MmsValue_getBoolean(val);
@@ -1840,10 +1835,27 @@ void MmsClient::ReportCallback(void* parameter, ClientReport report) {
                                 } break;
                             case MMS_BIT_STRING: {
                                 int bitSize = MmsValue_getBitStringSize(val);
-                                char bitStr[128];
-                                snprintf(bitStr, sizeof(bitStr), "BitString(size=%d)", bitSize);
-                                data.stringValue = bitStr;
-                                } break;
+                                uint32_t bitInt = MmsValue_getBitStringAsInteger(val);
+                                data.intValue = static_cast<int64_t>(bitInt);
+                                if (attrName == "q") {
+                                    std::string qualityStr;
+                                    if (bitInt & QUALITY_VALIDITY_INVALID) qualityStr += "Invalid|";
+                                    if (bitInt & QUALITY_VALIDITY_QUESTIONABLE) qualityStr += "Questionable|";
+                                    if (qualityStr.empty()) qualityStr = "Good";
+                                    else qualityStr.pop_back();
+                                    data.stringValue = qualityStr;
+                                } else if (bitSize == 2 && attrName.find("stVal") != std::string::npos) {
+                                    switch (bitInt) {
+                                        case 0: data.stringValue = "intermediate-state"; break;
+                                        case 1: data.stringValue = "off"; break;
+                                        case 2: data.stringValue = "on"; break;
+                                        case 3: data.stringValue = "bad-state"; break;
+                                        default: data.stringValue = "unknown(" + std::to_string(bitInt) + ")";
+                                    }
+                                } else {
+                                    data.stringValue = "";
+                                }
+                                } break;  
                             case MMS_STRUCTURE: {
                                 int size = MmsValue_getArraySize(val);
                                 for (int j = 0; j < size; j++) {
@@ -1888,58 +1900,70 @@ void MmsClient::ReportCallback(void* parameter, ClientReport report) {
     }
 
     client->tsfn_.NonBlockingCall([client, rcbRef, rptId, reportValues, reasonsForInclusion, timestamp](Napi::Env env, Napi::Function jsCallback) {
-        Napi::Object eventObj = Napi::Object::New(env);
-        eventObj.Set("clientID", Napi::String::New(env, client->clientID_.c_str()));
-        eventObj.Set("type", Napi::String::New(env, "data"));
-        eventObj.Set("event", Napi::String::New(env, "report"));
-        eventObj.Set("rcbRef", Napi::String::New(env, rcbRef));
-        eventObj.Set("rptId", Napi::String::New(env, rptId));
+        try {
+            Napi::Object eventObj = Napi::Object::New(env);
+            eventObj.Set("clientID", Napi::String::New(env, client->clientID_.c_str()));
+            eventObj.Set("type", Napi::String::New(env, "data"));
+            eventObj.Set("event", Napi::String::New(env, "report"));
+            eventObj.Set("rcbRef", Napi::String::New(env, rcbRef));
+            eventObj.Set("rptId", Napi::String::New(env, rptId));
 
-        if (timestamp > 0) {
-            time_t time = timestamp / 1000;
-            char timeStr[64];
-            strftime(timeStr, sizeof(timeStr), "%Y-%m-%d %H:%M:%S", gmtime(&time));
-            std::string timeString = std::string(timeStr) + "." + std::to_string(timestamp % 1000);
-            eventObj.Set("timestamp", Napi::String::New(env, timeString));
-        }
-
-        Napi::Array valuesArray = Napi::Array::New(env, reportValues.size());
-        std::function<Napi::Value(const ResultData&)> toNapiValue = [&](const ResultData& data) -> Napi::Value {
-            if (!data.isValid) return Napi::String::New(env, data.errorReason);
-            switch (data.type) {
-                case MMS_FLOAT: return Napi::Number::New(env, data.floatValue);
-                case MMS_INTEGER: return Napi::Number::New(env, data.intValue);
-                case MMS_BOOLEAN: return Napi::Boolean::New(env, data.boolValue);
-                case MMS_VISIBLE_STRING: case MMS_UTC_TIME: case MMS_BIT_STRING: return Napi::String::New(env, data.stringValue);
-                case MMS_STRUCTURE: {
-                    Napi::Object structObj = Napi::Object::New(env);
-                    for (size_t i = 0; i < data.structureElements.size(); i++)
-                        structObj.Set(Napi::String::New(env, "field" + std::to_string(i)), toNapiValue(data.structureElements[i]));
-                    return structObj;
-                }
-                case MMS_ARRAY: {
-                    Napi::Array array = Napi::Array::New(env, data.arrayElements.size());
-                    for (size_t i = 0; i < data.arrayElements.size(); i++)
-                        array.Set(uint32_t(i), toNapiValue(data.arrayElements[i]));
-                    return array;
-                }
-                default: return Napi::String::New(env, "Unsupported type");
+            if (timestamp > 0) {
+                time_t time = timestamp / 1000;
+                char timeStr[64];
+                strftime(timeStr, sizeof(timeStr), "%Y-%m-%d %H:%M:%S", gmtime(&time));
+                std::string timeString = std::string(timeStr) + "." + std::to_string(timestamp % 1000);
+                eventObj.Set("timestamp", Napi::String::New(env, timeString));
             }
-        };
-        for (size_t i = 0; i < reportValues.size(); i++) {
-            valuesArray.Set(uint32_t(i), toNapiValue(reportValues[i]));
-        }
-        eventObj.Set("values", valuesArray);
 
-        Napi::Array reasonsArray = Napi::Array::New(env, reasonsForInclusion.size());
-        for (size_t i = 0; i < reasonsForInclusion.size(); i++) {
-            reasonsArray.Set(uint32_t(i), Napi::Number::New(env, reasonsForInclusion[i]));
-        }
-        eventObj.Set("reasonsForInclusion", reasonsArray);
+            Napi::Array valuesArray = Napi::Array::New(env, reportValues.size());
+            std::function<Napi::Value(const ResultData&)> toNapiValue = [&](const ResultData& data) -> Napi::Value {
+                if (!data.isValid) return Napi::String::New(env, data.errorReason);
+                switch (data.type) {
+                    case MMS_FLOAT: return Napi::Number::New(env, data.floatValue);
+                    case MMS_INTEGER: return Napi::Number::New(env, data.intValue);
+                    case MMS_BOOLEAN: return Napi::Boolean::New(env, data.boolValue);
+                    case MMS_VISIBLE_STRING: case MMS_UTC_TIME: return Napi::String::New(env, data.stringValue);
+                    case MMS_BIT_STRING:
+                            if (!data.stringValue.empty()) {
+                                return Napi::String::New(env, data.stringValue);
+                            } else {
+                                return Napi::Number::New(env, data.intValue);
+                            }
+                    case MMS_STRUCTURE: {
+                        Napi::Object structObj = Napi::Object::New(env);
+                        for (size_t i = 0; i < data.structureElements.size(); i++)
+                            structObj.Set(Napi::String::New(env, "field" + std::to_string(i)), toNapiValue(data.structureElements[i]));
+                        return structObj;
+                    }
+                    case MMS_ARRAY: {
+                        Napi::Array array = Napi::Array::New(env, data.arrayElements.size());
+                        for (size_t i = 0; i < data.arrayElements.size(); i++)
+                            array.Set(uint32_t(i), toNapiValue(data.arrayElements[i]));
+                        return array;
+                    }
+                    default: return Napi::String::New(env, "Unsupported type");
+                }
+            };
+            for (size_t i = 0; i < reportValues.size(); i++) {
+                valuesArray.Set(uint32_t(i), toNapiValue(reportValues[i]));
+            }
+            eventObj.Set("values", valuesArray);
 
-        jsCallback.Call({Napi::String::New(env, "data"), eventObj});
+            Napi::Array reasonsArray = Napi::Array::New(env, reasonsForInclusion.size());
+            for (size_t i = 0; i < reasonsForInclusion.size(); i++) {
+                reasonsArray.Set(uint32_t(i), Napi::Number::New(env, reasonsForInclusion[i]));
+            }
+            eventObj.Set("reasonsForInclusion", reasonsArray);
+
+            jsCallback.Call({Napi::String::New(env, "data"), eventObj});
+        } catch (const Napi::Error& e) {
+            printf("N-API Callback Error in ReportCallback: %s, clientID: %s\n", e.Message().c_str(), client->clientID_.c_str());
+        }
     });
 }
+
+
 
 Napi::Value MmsClient::EnableReporting(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
@@ -1973,11 +1997,15 @@ Napi::Value MmsClient::EnableReporting(const Napi::CallbackInfo& info) {
         if (error != IED_ERROR_OK || dataSetDirectory == nullptr) {
             printf("EnableReporting: Failed to read dataset directory for %s, error: %d, clientID: %s\n", datasetRef.c_str(), error, clientID_.c_str());
             tsfn_.NonBlockingCall([this, datasetRef, error](Napi::Env env, Napi::Function jsCallback) {
-                Napi::Object eventObj = Napi::Object::New(env);
-                eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
-                eventObj.Set("type", Napi::String::New(env, "error"));
-                eventObj.Set("reason", Napi::String::New(env, "Failed to read dataset directory for " + datasetRef + ", error: " + std::to_string(error)));
-                jsCallback.Call({Napi::String::New(env, "data"), eventObj});
+                try {
+                    Napi::Object eventObj = Napi::Object::New(env);
+                    eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
+                    eventObj.Set("type", Napi::String::New(env, "error"));
+                    eventObj.Set("reason", Napi::String::New(env, "Failed to read dataset directory for " + datasetRef + ", error: " + std::to_string(error)));
+                    jsCallback.Call({Napi::String::New(env, "data"), eventObj});
+                } catch (const Napi::Error& e) {
+                    printf("N-API Callback Error in EnableReporting: %s, clientID: %s\n", e.Message().c_str(), clientID_.c_str());
+                }
             });
             return env.Undefined();
         }
@@ -1988,11 +2016,15 @@ Napi::Value MmsClient::EnableReporting(const Napi::CallbackInfo& info) {
             printf("EnableReporting: Failed to read dataset %s, error: %d, clientID: %s\n", datasetRef.c_str(), error, clientID_.c_str());
             LinkedList_destroy(dataSetDirectory);
             tsfn_.NonBlockingCall([this, datasetRef, error](Napi::Env env, Napi::Function jsCallback) {
-                Napi::Object eventObj = Napi::Object::New(env);
-                eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
-                eventObj.Set("type", Napi::String::New(env, "error"));
-                eventObj.Set("reason", Napi::String::New(env, "Failed to read dataset " + datasetRef + ", error: " + std::to_string(error)));
-                jsCallback.Call({Napi::String::New(env, "data"), eventObj});
+                try {
+                    Napi::Object eventObj = Napi::Object::New(env);
+                    eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
+                    eventObj.Set("type", Napi::String::New(env, "error"));
+                    eventObj.Set("reason", Napi::String::New(env, "Failed to read dataset " + datasetRef + ", error: " + std::to_string(error)));
+                    jsCallback.Call({Napi::String::New(env, "data"), eventObj});
+                } catch (const Napi::Error& e) {
+                    printf("N-API Callback Error in EnableReporting: %s, clientID: %s\n", e.Message().c_str(), clientID_.c_str());
+                }
             });
             return env.Undefined();
         }
@@ -2004,11 +2036,15 @@ Napi::Value MmsClient::EnableReporting(const Napi::CallbackInfo& info) {
             LinkedList_destroy(dataSetDirectory);
             ClientDataSet_destroy(clientDataSet);
             tsfn_.NonBlockingCall([this, rcbRef, error](Napi::Env env, Napi::Function jsCallback) {
-                Napi::Object eventObj = Napi::Object::New(env);
-                eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
-                eventObj.Set("type", Napi::String::New(env, "error"));
-                eventObj.Set("reason", Napi::String::New(env, "Failed to get RCB values for " + rcbRef + ", error: " + std::to_string(error)));
-                jsCallback.Call({Napi::String::New(env, "data"), eventObj});
+                try {
+                    Napi::Object eventObj = Napi::Object::New(env);
+                    eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
+                    eventObj.Set("type", Napi::String::New(env, "error"));
+                    eventObj.Set("reason", Napi::String::New(env, "Failed to get RCB values for " + rcbRef + ", error: " + std::to_string(error)));
+                    jsCallback.Call({Napi::String::New(env, "data"), eventObj});
+                } catch (const Napi::Error& e) {
+                    printf("N-API Callback Error in EnableReporting: %s, clientID: %s\n", e.Message().c_str(), clientID_.c_str());
+                }
             });
             return env.Undefined();
         }
@@ -2034,18 +2070,22 @@ Napi::Value MmsClient::EnableReporting(const Napi::CallbackInfo& info) {
             LinkedList_destroy(dataSetDirectory);
             ClientDataSet_destroy(clientDataSet);
             tsfn_.NonBlockingCall([this, rcbRef, error](Napi::Env env, Napi::Function jsCallback) {
-                Napi::Object eventObj = Napi::Object::New(env);
-                eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
-                eventObj.Set("type", Napi::String::New(env, "error"));
-                eventObj.Set("reason", Napi::String::New(env, "Failed to set RCB values for " + rcbRef + ", error: " + std::to_string(error)));
-                jsCallback.Call({Napi::String::New(env, "data"), eventObj});
+                try {
+                    Napi::Object eventObj = Napi::Object::New(env);
+                    eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
+                    eventObj.Set("type", Napi::String::New(env, "error"));
+                    eventObj.Set("reason", Napi::String::New(env, "Failed to set RCB values for " + rcbRef + ", error: " + std::to_string(error)));
+                    jsCallback.Call({Napi::String::New(env, "data"), eventObj});
+                } catch (const Napi::Error& e) {
+                    printf("N-API Callback Error in EnableReporting: %s, clientID: %s\n", e.Message().c_str(), clientID_.c_str());
+                }
             });
             return env.Undefined();
         }
 
         //Thread_sleep(1000);
 
-        /* Trigger GI Report */
+        //Trigger GI Report
         ClientReportControlBlock_setGI(rcb, true);
         IedConnection_setRCBValues(connection_, &error, rcb, RCB_ELEMENT_GI, true);
 
@@ -2055,11 +2095,15 @@ Napi::Value MmsClient::EnableReporting(const Napi::CallbackInfo& info) {
             LinkedList_destroy(dataSetDirectory);
             ClientDataSet_destroy(clientDataSet);
             tsfn_.NonBlockingCall([this, rcbRef, error](Napi::Env env, Napi::Function jsCallback) {
-                Napi::Object eventObj = Napi::Object::New(env);
-                eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
-                eventObj.Set("type", Napi::String::New(env, "error"));
-                eventObj.Set("reason", Napi::String::New(env, "Failed to set RCB value RCB_ELEMENT_GI for " + rcbRef + ", error: " + std::to_string(error)));
-                jsCallback.Call({Napi::String::New(env, "data"), eventObj});
+                try {
+                    Napi::Object eventObj = Napi::Object::New(env);
+                    eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
+                    eventObj.Set("type", Napi::String::New(env, "error"));
+                    eventObj.Set("reason", Napi::String::New(env, "Failed to set RCB value RCB_ELEMENT_GI for " + rcbRef + ", error: " + std::to_string(error)));
+                    jsCallback.Call({Napi::String::New(env, "data"), eventObj});
+                } catch (const Napi::Error& e) {
+                    printf("N-API Callback Error in EnableReporting: %s, clientID: %s\n", e.Message().c_str(), clientID_.c_str());
+                }
             });
             return env.Undefined();
         }
@@ -2074,23 +2118,31 @@ Napi::Value MmsClient::EnableReporting(const Napi::CallbackInfo& info) {
 
         printf("EnableReporting: Successfully enabled reporting for %s, clientID: %s\n", rcbRef.c_str(), clientID_.c_str());
         tsfn_.NonBlockingCall([this, rcbRef](Napi::Env env, Napi::Function jsCallback) {
-            Napi::Object eventObj = Napi::Object::New(env);
-            eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
-            eventObj.Set("type", Napi::String::New(env, "control"));
-            eventObj.Set("event", Napi::String::New(env, "reportingEnabled"));
-            eventObj.Set("rcbRef", Napi::String::New(env, rcbRef));
-            jsCallback.Call({Napi::String::New(env, "data"), eventObj});
+            try {
+                Napi::Object eventObj = Napi::Object::New(env);
+                eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
+                eventObj.Set("type", Napi::String::New(env, "control"));
+                eventObj.Set("event", Napi::String::New(env, "reportingEnabled"));
+                eventObj.Set("rcbRef", Napi::String::New(env, rcbRef));
+                jsCallback.Call({Napi::String::New(env, "data"), eventObj});
+            } catch (const Napi::Error& e) {
+                printf("N-API Callback Error in EnableReporting: %s, clientID: %s\n", e.Message().c_str(), clientID_.c_str());
+            }
         });
 
         return env.Undefined();
     } catch (const std::exception& e) {
         printf("EnableReporting: Exception occurred: %s, clientID: %s\n", e.what(), clientID_.c_str());
         tsfn_.NonBlockingCall([this, e](Napi::Env env, Napi::Function jsCallback) {
-            Napi::Object eventObj = Napi::Object::New(env);
-            eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
-            eventObj.Set("type", Napi::String::New(env, "error"));
-            eventObj.Set("reason", Napi::String::New(env, std::string("Exception in EnableReporting: ") + e.what()));
-            jsCallback.Call({Napi::String::New(env, "data"), eventObj});
+            try {
+                Napi::Object eventObj = Napi::Object::New(env);
+                eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
+                eventObj.Set("type", Napi::String::New(env, "error"));
+                eventObj.Set("reason", Napi::String::New(env, std::string("Exception in EnableReporting: ") + e.what()));
+                jsCallback.Call({Napi::String::New(env, "data"), eventObj});
+            } catch (const Napi::Error& e) {
+                printf("N-API Callback Error in EnableReporting: %s, clientID: %s\n", e.Message().c_str(), clientID_.c_str());
+            }
         });
         return env.Undefined();
     }
@@ -2128,11 +2180,15 @@ Napi::Value MmsClient::DisableReporting(const Napi::CallbackInfo& info) {
             if (error != IED_ERROR_OK) {
                 printf("DisableReporting: Failed to disable reporting for %s, error: %d, clientID: %s\n", rcbRef.c_str(), error, clientID_.c_str());
                 tsfn_.NonBlockingCall([this, rcbRef, error](Napi::Env env, Napi::Function jsCallback) {
-                    Napi::Object eventObj = Napi::Object::New(env);
-                    eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
-                    eventObj.Set("type", Napi::String::New(env, "error"));
-                    eventObj.Set("reason", Napi::String::New(env, "Failed to disable reporting for " + rcbRef + ", error: " + std::to_string(error)));
-                    jsCallback.Call({Napi::String::New(env, "data"), eventObj});
+                    try {
+                        Napi::Object eventObj = Napi::Object::New(env);
+                        eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
+                        eventObj.Set("type", Napi::String::New(env, "error"));
+                        eventObj.Set("reason", Napi::String::New(env, "Failed to disable reporting for " + rcbRef + ", error: " + std::to_string(error)));
+                        jsCallback.Call({Napi::String::New(env, "data"), eventObj});
+                    } catch (const Napi::Error& e) {
+                        printf("N-API Callback Error in DisableReporting: %s, clientID: %s\n", e.Message().c_str(), clientID_.c_str());
+                    }
                 });
             }
             ClientReportControlBlock_destroy(reportInfo.rcb);
@@ -2150,23 +2206,31 @@ Napi::Value MmsClient::DisableReporting(const Napi::CallbackInfo& info) {
         activeReports_.erase(it);
         printf("DisableReporting: Successfully disabled reporting for %s, clientID: %s\n", rcbRef.c_str(), clientID_.c_str());
         tsfn_.NonBlockingCall([this, rcbRef](Napi::Env env, Napi::Function jsCallback) {
-            Napi::Object eventObj = Napi::Object::New(env);
-            eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
-            eventObj.Set("type", Napi::String::New(env, "control"));
-            eventObj.Set("event", Napi::String::New(env, "reportingDisabled"));
-            eventObj.Set("rcbRef", Napi::String::New(env, rcbRef));
-            jsCallback.Call({Napi::String::New(env, "data"), eventObj});
+            try {
+                Napi::Object eventObj = Napi::Object::New(env);
+                eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
+                eventObj.Set("type", Napi::String::New(env, "control"));
+                eventObj.Set("event", Napi::String::New(env, "reportingDisabled"));
+                eventObj.Set("rcbRef", Napi::String::New(env, rcbRef));
+                jsCallback.Call({Napi::String::New(env, "data"), eventObj});
+            } catch (const Napi::Error& e) {
+                printf("N-API Callback Error in DisableReporting: %s, clientID: %s\n", e.Message().c_str(), clientID_.c_str());
+            }
         });
 
         return env.Undefined();
     } catch (const std::exception& e) {
         printf("DisableReporting: Exception occurred: %s, clientID: %s\n", e.what(), clientID_.c_str());
         tsfn_.NonBlockingCall([this, e](Napi::Env env, Napi::Function jsCallback) {
-            Napi::Object eventObj = Napi::Object::New(env);
-            eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
-            eventObj.Set("type", Napi::String::New(env, "error"));
-            eventObj.Set("reason", Napi::String::New(env, std::string("Exception in DisableReporting: ") + e.what()));
-            jsCallback.Call({Napi::String::New(env, "data"), eventObj});
+            try {
+                Napi::Object eventObj = Napi::Object::New(env);
+                eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
+                eventObj.Set("type", Napi::String::New(env, "error"));
+                eventObj.Set("reason", Napi::String::New(env, std::string("Exception in DisableReporting: ") + e.what()));
+                jsCallback.Call({Napi::String::New(env, "data"), eventObj});
+            } catch (const Napi::Error& e) {
+                printf("N-API Callback Error in DisableReporting: %s, clientID: %s\n", e.Message().c_str(), clientID_.c_str());
+            }
         });
         return env.Undefined();
     }
