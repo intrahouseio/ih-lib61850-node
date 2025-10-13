@@ -1027,9 +1027,325 @@ Napi::Value MmsClient::GetDataSetDirectory(const Napi::CallbackInfo& info) {
 }
 
 Napi::Value MmsClient::ReadData(const Napi::CallbackInfo& info) {
-    // Полный код из предыдущего ответа, с фиксами
-    // ... (вставьте полный код ReadData из моего предыдущего ответа)
+    Napi::Env env = info.Env();
+
+    // Проверяем, передан ли массив dataRefs или одиночный dataRef
+    if (info.Length() < 1) {
+        Napi::TypeError::New(env, "Expected dataRef (string) or dataRefs (array of strings)").ThrowAsJavaScriptException();
+        return env.Undefined();
+    }
+    
+    std::vector<std::string> dataRefs;
+    
+    if (info[0].IsString()) {
+        // Одиночный dataRef
+        std::string dataRef = info[0].As<Napi::String>().Utf8Value();
+        dataRefs.push_back(dataRef);
+    } else if (info[0].IsArray()) {
+        // Массив dataRefs
+        Napi::Array dataRefsArray = info[0].As<Napi::Array>();
+        for (uint32_t i = 0; i < dataRefsArray.Length(); i++) {
+            if (dataRefsArray.Get(i).IsString()) {
+                dataRefs.push_back(dataRefsArray.Get(i).As<Napi::String>().Utf8Value());
+            } else {
+                Napi::TypeError::New(env, "Expected each dataRef to be a string").ThrowAsJavaScriptException();
+                return env.Undefined();
+            }
+        }
+    } else {
+        Napi::TypeError::New(env, "Expected dataRef (string) or dataRefs (array of strings)").ThrowAsJavaScriptException();
+        return env.Undefined();
+    }
+
+    std::lock_guard<std::mutex> lock(connMutex_);
+    if (!connected_) {
+        printf("ReadData: Not connected, clientID: %s\n", clientID_.c_str());
+        Napi::Error::New(env, "Not connected").ThrowAsJavaScriptException();
+        return env.Undefined();
+    }
+
+    try {
+        std::vector<ResultData> results;
+        
+        for (const auto& dataRef : dataRefs) {
+            IedClientError error;
+            FunctionalConstraint fc = IEC61850_FC_ST;
+            
+            // Определяем Functional Constraint на основе dataRef
+            if (dataRef.find(".SPCSO") != std::string::npos) {
+                fc = IEC61850_FC_ST;
+            } else if (dataRef.find(".AnIn") != std::string::npos) {
+                fc = IEC61850_FC_MX;
+            } else if (dataRef.find(".NamPlt") != std::string::npos || dataRef.find(".PhyNam") != std::string::npos) {
+                fc = IEC61850_FC_DC;
+            } else if (dataRef.find(".Mod") != std::string::npos || dataRef.find(".Proxy") != std::string::npos) {
+                fc = IEC61850_FC_ST;
+            } else if (dataRef.find(".Oper") != std::string::npos) {
+                fc = IEC61850_FC_CO;
+            } else if (dataRef.find(".ctlModel") != std::string::npos) {
+                fc = IEC61850_FC_CF;
+            }
+
+            MmsValue* value = nullptr;
+            std::vector<FunctionalConstraint> fcs = {
+                fc, IEC61850_FC_ALL, IEC61850_FC_ST, IEC61850_FC_MX,
+                IEC61850_FC_DC, IEC61850_FC_SP, IEC61850_FC_CO, IEC61850_FC_CF
+            };
+            
+            // Пытаемся прочитать с разными FC
+            for (auto tryFc : fcs) {
+                value = IedConnection_readObject(connection_, &error, dataRef.c_str(), tryFc);
+                if (error == IED_ERROR_OK && value != nullptr) {
+                    printf("ReadData: Succeeded with FC %d for dataRef %s, clientID: %s\n", tryFc, dataRef.c_str(), clientID_.c_str());
+                    break;
+                }
+                printf("ReadData: Failed with FC %d for dataRef %s, error: %d, clientID: %s\n", tryFc, dataRef.c_str(), error, clientID_.c_str());
+            }
+
+            if (error != IED_ERROR_OK || value == nullptr) {
+                printf("Read failed for dataRef: %s, final error: %d, clientID: %s\n", dataRef.c_str(), error, clientID_.c_str());
+                ResultData resultData;
+                resultData.isValid = false;
+                resultData.errorReason = "Read failed: error " + std::to_string(error);
+                results.push_back(resultData);
+                continue;
+            }
+
+            // Функция конвертации MmsValue в ResultData
+            std::function<ResultData(MmsValue*, const std::string&)> convertMmsValue;
+            convertMmsValue = [&](MmsValue* val, const std::string& attrName) -> ResultData {
+                ResultData data = { MmsValue_getType(val), 0.0f, 0LL, false, "", {}, {}, true, "" };
+                switch (data.type) {
+                    case MMS_FLOAT:
+                        data.floatValue = MmsValue_toFloat(val);
+                        if (std::isnan(data.floatValue) || std::isinf(data.floatValue)) {
+                            data.isValid = false;
+                            data.errorReason = "Invalid float value";
+                        }
+                        break;
+                    case MMS_INTEGER:
+                        data.intValue = MmsValue_toInt64(val);
+                        if (attrName == "ctlModel") {
+                            switch (data.intValue) {
+                                case 0: data.stringValue = "status-only"; break;
+                                case 1: data.stringValue = "direct-with-normal-security"; break;
+                                case 2: data.stringValue = "sbo-with-normal-security"; break;
+                                case 3: data.stringValue = "direct-with-enhanced-security"; break;
+                                case 4: data.stringValue = "sbo-with-enhanced-security"; break;
+                                default: data.stringValue = "unknown(" + std::to_string(data.intValue) + ")";
+                            }
+                        }
+                        break;
+                    case MMS_BOOLEAN:
+                        data.boolValue = MmsValue_getBoolean(val);
+                        break;
+                    case MMS_VISIBLE_STRING:
+                        data.stringValue = MmsValue_toString(val) ? MmsValue_toString(val) : "";
+                        break;
+                    case MMS_UTC_TIME: {
+                        uint64_t timestamp = MmsValue_getUtcTimeInMs(val);
+                        time_t time = timestamp / 1000;
+                        char timeStr[64];
+                        strftime(timeStr, sizeof(timeStr), "%Y-%m-%d %H:%M:%S", gmtime(&time));
+                        data.stringValue = std::string(timeStr) + "." + std::to_string(timestamp % 1000);
+                        } break;
+                    case MMS_BIT_STRING: {
+                        int bitSize = MmsValue_getBitStringSize(val);
+                        uint32_t bitInt = MmsValue_getBitStringAsInteger(val);
+                        data.intValue = static_cast<int64_t>(bitInt);
+                        if (attrName == "q") {
+                            std::string qualityStr;
+                            if (bitInt & QUALITY_VALIDITY_INVALID) qualityStr += "Invalid|";
+                            if (bitInt & QUALITY_VALIDITY_QUESTIONABLE) qualityStr += "Questionable|";
+                            if (qualityStr.empty()) qualityStr = "Good";
+                            else qualityStr.pop_back();
+                            data.stringValue = qualityStr;
+                        } else if (bitSize == 2 && attrName.find("stVal") != std::string::npos) {
+                            switch (bitInt) {
+                                case 0: data.stringValue = "intermediate-state"; break;
+                                case 1: data.stringValue = "off"; break;
+                                case 2: data.stringValue = "on"; break;
+                                case 3: data.stringValue = "bad-state"; break;
+                                default: data.stringValue = "unknown(" + std::to_string(bitInt) + ")";
+                            }
+                        } else {
+                            data.stringValue = "";
+                        }
+                        } break;
+                    case MMS_STRUCTURE: {
+                        int size = MmsValue_getArraySize(val);
+                        for (int j = 0; j < size; j++) {
+                            MmsValue* element = MmsValue_getElement(val, j);
+                            if (element) {
+                                std::string subAttrName = attrName + ".field" + std::to_string(j);
+                                ResultData subData = convertMmsValue(element, subAttrName);
+                                if (subData.isValid) data.structureElements.push_back(subData);
+                            }
+                        }
+                        } break;
+                    case MMS_ARRAY: {
+                        int size = MmsValue_getArraySize(val);
+                        for (int j = 0; j < size; j++) {
+                            MmsValue* element = MmsValue_getElement(val, j);
+                            if (element) {
+                                ResultData subData = convertMmsValue(element, attrName + "[" + std::to_string(j) + "]");
+                                data.arrayElements.push_back(subData);
+                            }
+                        }
+                        } break;
+                    case MMS_DATA_ACCESS_ERROR:
+                        data.isValid = false;
+                        data.errorReason = "Data access error";
+                        break;
+                    default:
+                        data.isValid = false;
+                        data.errorReason = "Unsupported type: " + std::to_string(data.type);
+                }
+                return data;
+            };
+
+            ResultData resultData = convertMmsValue(value, dataRef.substr(dataRef.rfind(".") + 1));
+            results.push_back(resultData);
+            MmsValue_delete(value);
+        }
+        
+        // Определяем тип события в зависимости от количества dataRefs
+        std::string eventType = (dataRefs.size() == 1) ? "data" : "batchData";
+        
+        // Отправка события через TSFN
+        tsfn_.NonBlockingCall([this, dataRefs, results, eventType](Napi::Env env, Napi::Function jsCallback) {
+            try {
+                Napi::Object eventObj = Napi::Object::New(env);
+                eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
+                eventObj.Set("type", Napi::String::New(env, "data"));
+                eventObj.Set("event", Napi::String::New(env, eventType));
+                
+                if (eventType == "data") {
+                    // Для одиночного dataRef сохраняем обратную совместимость
+                    eventObj.Set("dataRef", Napi::String::New(env, dataRefs[0]));
+                    
+                    std::function<Napi::Value(const ResultData&)> toNapiValue = [&](const ResultData& data) -> Napi::Value {
+                        if (!data.isValid) return Napi::String::New(env, data.errorReason);
+                        switch (data.type) {
+                            case MMS_FLOAT: return Napi::Number::New(env, data.floatValue);
+                            case MMS_INTEGER:
+                                if (!data.stringValue.empty()) {
+                                    return Napi::String::New(env, data.stringValue);
+                                }
+                                return Napi::Number::New(env, data.intValue);
+                            case MMS_BOOLEAN: return Napi::Boolean::New(env, data.boolValue);
+                            case MMS_VISIBLE_STRING: case MMS_UTC_TIME: return Napi::String::New(env, data.stringValue);
+                            case MMS_BIT_STRING:
+                                if (!data.stringValue.empty()) {
+                                    return Napi::String::New(env, data.stringValue);
+                                } else {
+                                    return Napi::Number::New(env, data.intValue);
+                                }
+                            case MMS_STRUCTURE: {
+                                Napi::Object structObj = Napi::Object::New(env);
+                                for (size_t i = 0; i < data.structureElements.size(); i++)
+                                    structObj.Set(Napi::String::New(env, "field" + std::to_string(i)), toNapiValue(data.structureElements[i]));
+                                return structObj;
+                            }
+                            case MMS_ARRAY: {
+                                Napi::Array array = Napi::Array::New(env, data.arrayElements.size());
+                                for (size_t i = 0; i < data.arrayElements.size(); i++)
+                                    array.Set(uint32_t(i), toNapiValue(data.arrayElements[i]));
+                                return array;
+                            }
+                            default: return Napi::String::New(env, "Unsupported type");
+                        }
+                    };
+                    
+                    Napi::Value result = toNapiValue(results[0]);
+                    eventObj.Set("value", result);
+                    eventObj.Set("isValid", Napi::Boolean::New(env, results[0].isValid));
+                } else {
+                    // Для множественных dataRefs
+                    Napi::Array dataRefsArray = Napi::Array::New(env, dataRefs.size());
+                    for (size_t i = 0; i < dataRefs.size(); i++) {
+                        dataRefsArray.Set(uint32_t(i), Napi::String::New(env, dataRefs[i]));
+                    }
+                    eventObj.Set("dataRefs", dataRefsArray);
+                    
+                    Napi::Array valuesArray = Napi::Array::New(env, results.size());
+                    for (size_t i = 0; i < results.size(); i++) {
+                        const ResultData& resultData = results[i];
+                        if (!resultData.isValid) {
+                            // Для невалидных данных отправляем объект с ошибкой
+                            Napi::Object errorObj = Napi::Object::New(env);
+                            errorObj.Set("isValid", Napi::Boolean::New(env, false));
+                            errorObj.Set("errorReason", Napi::String::New(env, resultData.errorReason));
+                            valuesArray.Set(uint32_t(i), errorObj);
+                        } else {
+                            // Для валидных данных используем существующую функцию конвертации
+                            std::function<Napi::Value(const ResultData&)> toNapiValue = [&](const ResultData& data) -> Napi::Value {
+                                if (!data.isValid) return Napi::String::New(env, data.errorReason);
+                                switch (data.type) {
+                                    case MMS_FLOAT: return Napi::Number::New(env, data.floatValue);
+                                    case MMS_INTEGER:
+                                        if (!data.stringValue.empty()) {
+                                            return Napi::String::New(env, data.stringValue);
+                                        }
+                                        return Napi::Number::New(env, data.intValue);
+                                    case MMS_BOOLEAN: return Napi::Boolean::New(env, data.boolValue);
+                                    case MMS_VISIBLE_STRING: case MMS_UTC_TIME: return Napi::String::New(env, data.stringValue);
+                                    case MMS_BIT_STRING:
+                                        if (!data.stringValue.empty()) {
+                                            return Napi::String::New(env, data.stringValue);
+                                        } else {
+                                            return Napi::Number::New(env, data.intValue);
+                                        }
+                                    case MMS_STRUCTURE: {
+                                        Napi::Object structObj = Napi::Object::New(env);
+                                        for (size_t i = 0; i < data.structureElements.size(); i++)
+                                            structObj.Set(Napi::String::New(env, "field" + std::to_string(i)), toNapiValue(data.structureElements[i]));
+                                        return structObj;
+                                    }
+                                    case MMS_ARRAY: {
+                                        Napi::Array array = Napi::Array::New(env, data.arrayElements.size());
+                                        for (size_t i = 0; i < data.arrayElements.size(); i++)
+                                            array.Set(uint32_t(i), toNapiValue(data.arrayElements[i]));
+                                        return array;
+                                    }
+                                    default: return Napi::String::New(env, "Unsupported type");
+                                }
+                            };
+                            
+                            Napi::Value result = toNapiValue(resultData);
+                            Napi::Object resultObj = Napi::Object::New(env);
+                            resultObj.Set("value", result);
+                            resultObj.Set("isValid", Napi::Boolean::New(env, true));
+                            valuesArray.Set(uint32_t(i), resultObj);
+                        }
+                    }
+                    eventObj.Set("values", valuesArray);
+                }
+                
+                jsCallback.Call({Napi::String::New(env, "data"), eventObj});
+            } catch (const Napi::Error& e) {
+                printf("N-API Callback Error in ReadData: %s, clientID: %s\n", e.Message().c_str(), clientID_.c_str());
+            }
+        });
+        
+        return env.Undefined();
+    } catch (const std::exception& e) {
+        printf("Exception in ReadData: %s, clientID: %s\n", e.what(), clientID_.c_str());
+        tsfn_.NonBlockingCall([this, e](Napi::Env env, Napi::Function jsCallback) {
+            try {
+                Napi::Object eventObj = Napi::Object::New(env);
+                eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
+                eventObj.Set("type", Napi::String::New(env, "error"));
+                eventObj.Set("reason", Napi::String::New(env, std::string("Exception in ReadData: ") + e.what()));
+                jsCallback.Call({Napi::String::New(env, "data"), eventObj});
+            } catch (const Napi::Error& e) {
+                printf("N-API Callback Error in ReadData: %s, clientID: %s\n", e.Message().c_str(), clientID_.c_str());
+            }
+        });
+        return env.Undefined();
+    }
 }
+
 
 Napi::Value MmsClient::ControlObject(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
