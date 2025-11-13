@@ -41,16 +41,16 @@ private:
    
     // Struct for holding MMS value data
     struct ResultData {
-        MmsType type;
-        float floatValue;
-        int32_t intValue;
-        bool boolValue;
-        std::string stringValue;
-        std::vector<ResultData> structureElements;
-        std::vector<ResultData> arrayElements;
-        bool isValid;
-        std::string errorReason;
-    };
+    MmsType type;
+    float floatValue;
+    int64_t intValue;  
+    bool boolValue;
+    std::string stringValue;
+    std::vector<ResultData> structureElements;
+    std::vector<ResultData> arrayElements;
+    bool isValid;
+    std::string errorReason;
+};
 
     struct ReportInfo {
         ClientReportControlBlock rcb;
@@ -71,6 +71,7 @@ private:
 };
 
 #endif*/
+
 
 #ifndef MMS_CLIENT_H
 #define MMS_CLIENT_H
@@ -141,7 +142,7 @@ private:
     bool running_;
     bool connected_;
     std::string clientID_;
-    bool usingPrimaryIp_;
-};
+    bool usingPrimaryIp_;    
+    };
 
 #endif

@@ -31,7 +31,7 @@ Napi::Object MmsClient::Init(Napi::Env env, Napi::Object exports) {
         InstanceMethod("getDataSetDirectory", &MmsClient::GetDataSetDirectory),
         InstanceMethod("browseDataModel", &MmsClient::BrowseDataModel),
         InstanceMethod("enableReporting", &MmsClient::EnableReporting),
-        InstanceMethod("disableReporting", &MmsClient::DisableReporting)        
+        InstanceMethod("disableReporting", &MmsClient::DisableReporting)          
     });
 
     constructor = Napi::Persistent(func);
@@ -369,7 +369,52 @@ Napi::Value MmsClient::Connect(const Napi::CallbackInfo& info) {
     }
 }
 
-Napi::Value MmsClient::ReadDataSetValues(const Napi::CallbackInfo& info) {
+Napi::Value MmsValueToNapi(Napi::Env env, MmsValue* value) {
+    if (!value) return env.Null();
+    MmsType type = MmsValue_getType(value);
+
+    switch (type) {
+        case MMS_FLOAT:
+            return Napi::Number::New(env, MmsValue_toDouble(value));
+        case MMS_INTEGER:
+        case MMS_UNSIGNED:
+            return Napi::Number::New(env, static_cast<double>(MmsValue_toInt64(value)));
+        case MMS_BOOLEAN:
+            return Napi::Boolean::New(env, MmsValue_getBoolean(value));
+        case MMS_VISIBLE_STRING:
+        case MMS_UTC_TIME: {
+            const char* str = MmsValue_toString(value);
+            return str ? Napi::String::New(env, str) : env.Null();
+        }
+        case MMS_BIT_STRING: {
+            int bits = MmsValue_getBitStringSize(value);
+            if (bits <= 64) {
+                return Napi::Number::New(env, MmsValue_getBitStringAsInteger(value));
+            }
+            return Napi::String::New(env, MmsValue_toString(value));
+        }
+        case MMS_STRUCTURE: {
+            Napi::Object obj = Napi::Object::New(env);
+            int size = MmsValue_getArraySize(value);
+            for (int i = 0; i < size; ++i) {
+                obj.Set(std::to_string(i), MmsValueToNapi(env, MmsValue_getElement(value, i)));
+            }
+            return obj;
+        }
+        case MMS_ARRAY: {
+            int size = MmsValue_getArraySize(value);
+            Napi::Array arr = Napi::Array::New(env, size);
+            for (int i = 0; i < size; ++i) {
+                arr.Set(i, MmsValueToNapi(env, MmsValue_getElement(value, i)));
+            }
+            return arr;
+        }
+        default:
+            return Napi::String::New(env, "Unsupported type");
+    }
+}
+
+/*Napi::Value MmsClient::ReadDataSetValues(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
     
     // Проверяем, передан ли массив datasetRefs
@@ -652,11 +697,62 @@ Napi::Value MmsClient::ReadDataSetValues(const Napi::CallbackInfo& info) {
         });
         return env.Undefined();
     }
+}*/
+
+Napi::Value MmsClient::ReadDataSetValues(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+
+    if (!connected_) {
+        Napi::Error::New(env, "Client not connected").ThrowAsJavaScriptException();
+        return env.Null();
+    }
+
+    std::vector<std::string> datasetRefs;
+    if (info.Length() != 1) {
+        Napi::TypeError::New(env, "Expected one argument").ThrowAsJavaScriptException();
+        return env.Null();
+    }
+    if (info[0].IsString()) {
+        datasetRefs.push_back(info[0].As<Napi::String>().Utf8Value());
+    } else if (info[0].IsArray()) {
+        Napi::Array arr = info[0].As<Napi::Array>();
+        for (uint32_t i = 0; i < arr.Length(); ++i) {
+            if (arr.Get(i).IsString()) {
+                datasetRefs.push_back(arr.Get(i).As<Napi::String>().Utf8Value());
+            }
+        }
+    } else {
+        Napi::TypeError::New(env, "Invalid argument").ThrowAsJavaScriptException();
+        return env.Null();
+    }
+
+    std::lock_guard<std::mutex> lock(connMutex_);
+    Napi::Array jsResults = Napi::Array::New(env, datasetRefs.size());
+
+    for (size_t i = 0; i < datasetRefs.size(); ++i) {
+        const std::string& ref = datasetRefs[i];
+        IedClientError error;
+        ClientDataSet ds = IedConnection_readDataSetValues(connection_, &error, ref.c_str(), nullptr);
+
+        Napi::Object obj = Napi::Object::New(env);
+        if (error != IED_ERROR_OK || !ds) {
+            obj.Set("isValid", false);
+            obj.Set("errorReason", "Read failed: " + std::to_string(error));
+        } else {
+            MmsValue* values = ClientDataSet_getValues(ds);
+            obj.Set("isValid", true);
+            obj.Set("value", MmsValueToNapi(env, values));
+            ClientDataSet_destroy(ds);  // Освобождает values
+        }
+        jsResults.Set(i, obj);
+    }
+
+    return jsResults;
 }
 
 
 
-Napi::Value MmsClient::BrowseDataModel(const Napi::CallbackInfo& info) {
+/*Napi::Value MmsClient::BrowseDataModel(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
     Napi::Promise::Deferred deferred = Napi::Promise::Deferred::New(env);
 
@@ -783,6 +879,100 @@ Napi::Value MmsClient::BrowseDataModel(const Napi::CallbackInfo& info) {
         deferred.Reject(Napi::Error::New(env, std::string("Exception in BrowseDataModel: ") + e.what()).Value());
         return deferred.Promise();
     }
+}*/
+
+Napi::Value MmsClient::BrowseDataModel(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+
+    if (!connected_) {
+        Napi::Error::New(env, "Not connected").ThrowAsJavaScriptException();
+        return env.Null();
+    }
+
+    std::lock_guard<std::mutex> lock(connMutex_);
+    IedClientError error;
+
+    LinkedList deviceList = IedConnection_getLogicalDeviceList(connection_, &error);
+    if (error != IED_ERROR_OK || !deviceList) {
+        Napi::Error::New(env, "Failed to get logical device list").ThrowAsJavaScriptException();
+        return env.Null();
+    }
+
+    Napi::Array resultArray = Napi::Array::New(env);
+    uint32_t deviceIndex = 0;
+
+    LinkedList device = LinkedList_getNext(deviceList);
+    while (device) {
+        char* ldName = (char*)device->data;
+        if (!ldName) { device = LinkedList_getNext(device); continue; }
+
+        Napi::Object ldObj = Napi::Object::New(env);
+        ldObj.Set("name", Napi::String::New(env, ldName));
+        Napi::Array lnArray = Napi::Array::New(env);
+        uint32_t lnIndex = 0;
+
+        LinkedList logicalNodes = IedConnection_getLogicalDeviceDirectory(connection_, &error, ldName);
+        if (error == IED_ERROR_OK && logicalNodes) {
+            LinkedList ln = LinkedList_getNext(logicalNodes);
+            while (ln) {
+                char* lnName = (char*)ln->data;
+                if (!lnName) { ln = LinkedList_getNext(ln); continue; }
+
+                std::string lnRef = std::string(ldName) + "/" + lnName;
+                Napi::Object lnObj = Napi::Object::New(env);
+                lnObj.Set("name", Napi::String::New(env, lnName));
+
+                Napi::Array dsArray = Napi::Array::New(env);
+                uint32_t dsIndex = 0;
+
+                LinkedList dataSets = IedConnection_getLogicalNodeDirectory(connection_, &error, lnRef.c_str(), ACSI_CLASS_DATA_SET);
+                if (error == IED_ERROR_OK && dataSets) {
+                    LinkedList ds = LinkedList_getNext(dataSets);
+                    while (ds) {
+                        char* dsName = (char*)ds->data;
+                        if (!dsName) { ds = LinkedList_getNext(ds); continue; }
+
+                        std::string dsRef = lnRef + "." + dsName;
+                        bool isDeletable = false;
+
+                        LinkedList members = IedConnection_getDataSetDirectory(connection_, &error, dsRef.c_str(), &isDeletable);
+                        Napi::Object dsObj = Napi::Object::New(env);
+                        dsObj.Set("name", Napi::String::New(env, dsName));
+                        dsObj.Set("reference", Napi::String::New(env, dsRef));
+                        dsObj.Set("isDeletable", Napi::Boolean::New(env, isDeletable));
+
+                        Napi::Array memberArray = Napi::Array::New(env);
+                        if (error == IED_ERROR_OK && members) {
+                            LinkedList member = LinkedList_getNext(members);
+                            uint32_t mIndex = 0;
+                            while (member) {
+                                char* mRef = (char*)member->data;
+                                if (mRef) memberArray.Set(mIndex++, Napi::String::New(env, mRef));
+                                member = LinkedList_getNext(member);
+                            }
+                            LinkedList_destroy(members);
+                        }
+                        dsObj.Set("members", memberArray);
+                        dsArray.Set(dsIndex++, dsObj);
+                        ds = LinkedList_getNext(ds);
+                    }
+                    LinkedList_destroy(dataSets);
+                }
+
+                lnObj.Set("dataSets", dsArray);
+                lnArray.Set(lnIndex++, lnObj);
+                ln = LinkedList_getNext(ln);
+            }
+            LinkedList_destroy(logicalNodes);
+        }
+
+        ldObj.Set("logicalNodes", lnArray);
+        resultArray.Set(deviceIndex++, ldObj);
+        device = LinkedList_getNext(device);
+    }
+    LinkedList_destroy(deviceList);
+
+    return resultArray;
 }
 
 Napi::Value MmsClient::CreateDataSet(const Napi::CallbackInfo& info) {
