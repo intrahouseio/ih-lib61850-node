@@ -486,7 +486,7 @@
     "python": "/opt/homebrew/opt/python@3.13/bin/python3.13",
     "standalone_static_library": 1,
     "global_prefix": "/opt/homebrew",
-    "local_prefix": "/Users/andreypetrov/Downloads/1/ih-lib61850-node",
+    "local_prefix": "/Users/andreypetrov/Downloads/3/ih-lib61850-node",
     "globalconfig": "/opt/homebrew/etc/npmrc",
     "userconfig": "/Users/andreypetrov/.npmrc",
     "init_module": "/Users/andreypetrov/.npm-init.js",

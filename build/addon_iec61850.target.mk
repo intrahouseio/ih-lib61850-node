@@ -58,8 +58,8 @@ INCS_Debug := \
 	-I/Users/andreypetrov/Library/Caches/node-gyp/23.9.0/deps/uv/include \
 	-I/Users/andreypetrov/Library/Caches/node-gyp/23.9.0/deps/zlib \
 	-I/Users/andreypetrov/Library/Caches/node-gyp/23.9.0/deps/v8/include \
-	-I/Users/andreypetrov/Downloads/1/ih-lib61850-node/node_modules/node-addon-api \
-	-I/Users/andreypetrov/Downloads/1/ih-lib61850-node/include/libiec61850 \
+	-I/Users/andreypetrov/Downloads/3/ih-lib61850-node/node_modules/node-addon-api \
+	-I/Users/andreypetrov/Downloads/3/ih-lib61850-node/include/libiec61850 \
 	-I$(srcdir)/src
 
 DEFS_Release := \
@@ -117,8 +117,8 @@ INCS_Release := \
 	-I/Users/andreypetrov/Library/Caches/node-gyp/23.9.0/deps/uv/include \
 	-I/Users/andreypetrov/Library/Caches/node-gyp/23.9.0/deps/zlib \
 	-I/Users/andreypetrov/Library/Caches/node-gyp/23.9.0/deps/v8/include \
-	-I/Users/andreypetrov/Downloads/1/ih-lib61850-node/node_modules/node-addon-api \
-	-I/Users/andreypetrov/Downloads/1/ih-lib61850-node/include/libiec61850 \
+	-I/Users/andreypetrov/Downloads/3/ih-lib61850-node/node_modules/node-addon-api \
+	-I/Users/andreypetrov/Downloads/3/ih-lib61850-node/include/libiec61850 \
 	-I$(srcdir)/src
 
 OBJS := \
@@ -179,7 +179,7 @@ LIBTOOLFLAGS_Release := \
 	-Wl,-search_paths_first
 
 LIBS := \
-	/Users/andreypetrov/Downloads/1/ih-lib61850-node/lib/build/libiec61850-macos-latest-arm64.a
+	/Users/andreypetrov/Downloads/3/ih-lib61850-node/lib/build/libiec61850-macos-latest-arm64.a
 
 $(builddir)/addon_iec61850.node: GYP_LDFLAGS := $(LDFLAGS_$(BUILDTYPE))
 $(builddir)/addon_iec61850.node: LIBS := $(LIBS)

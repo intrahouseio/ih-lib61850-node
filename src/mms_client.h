@@ -91,6 +91,18 @@ public:
     static Napi::Object Init(Napi::Env env, Napi::Object exports);
     MmsClient(const Napi::CallbackInfo& info);
     ~MmsClient();
+    // Struct for holding MMS value data
+    struct ResultData {
+        MmsType type;
+        float floatValue;
+        int64_t intValue;  
+        bool boolValue;
+        std::string stringValue;
+        std::vector<ResultData> structureElements;
+        std::vector<ResultData> arrayElements;
+        bool isValid;
+        std::string errorReason;
+    };
 
 private:
     static Napi::FunctionReference constructor;
@@ -114,18 +126,8 @@ private:
 
     static void ReportCallback(void* parameter, ClientReport report);
    
-    // Struct for holding MMS value data
-    struct ResultData {
-    MmsType type;
-    float floatValue;
-    int64_t intValue;  
-    bool boolValue;
-    std::string stringValue;
-    std::vector<ResultData> structureElements;
-    std::vector<ResultData> arrayElements;
-    bool isValid;
-    std::string errorReason;
-};
+    
+
 
     struct ReportInfo {
         ClientReportControlBlock rcb;
