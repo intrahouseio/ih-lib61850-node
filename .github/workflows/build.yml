@@ -17,7 +17,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '18.20.8'
+          node-version: '20.19.0'
       - name: Get package version
         id: package-version
         run: echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
@@ -59,14 +59,21 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20.19.0'
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
+      - name: Install Python 3.11 via PPA
+        run: |
+          apt-get update
+          apt-get install -y software-properties-common
+          add-apt-repository ppa:deadsnakes/ppa -y
+          apt-get update
+          apt-get install -y python3.11 python3.11-venv python3.11-dev
+        shell: bash
       - name: Install Python dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install setuptools
+          python3.11 -m ensurepip --upgrade
+          python3.11 -m pip install --upgrade pip setuptools
+        shell: bash
+      - name: Verify Python version
+        run: python3.11 --version && ldd --version
         shell: bash
       - name: Install cross-compilers for Linux ARM
         if: matrix.arch == 'arm' || matrix.arch == 'arm64'
