@@ -1,15 +1,12 @@
 name: Build and Publish
-
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
-
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
-
 jobs:
   create-release:
     runs-on: ubuntu-latest
@@ -17,24 +14,20 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20.19.0'
-
+          node-version: '18.20.8'
       - name: Get package version
         id: package-version
         run: echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
         shell: bash
-
       - name: Delete existing release
         run: |
           gh release delete v${{ steps.package-version.outputs.version }} --yes || true
           git push origin :refs/tags/v${{ steps.package-version.outputs.version }} || true
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
-
       - name: Create Release
         id: create_release
         uses: softprops/action-gh-release@v2
@@ -47,187 +40,115 @@ jobs:
           prerelease: false
           generate_release_notes: true
 
-      - name: Save upload URL
-        run: echo "https://uploads.github.com/repos/${{ github.repository }}/releases/${{ steps.create_release.outputs.id }}/assets{?name,label}" > upload_url.txt
-
-      - name: Upload upload URL as artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: upload-url
-          path: upload_url.txt
-
-  build-and-upload:
+  linux-build-and-upload:
     needs: create-release
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
+    container: ubuntu:21.04
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     strategy:
       matrix:
-        os:
-          - ubuntu-latest
-          - windows-latest
-          - macos-latest
         arch:
           - x64
-        include:
-          - os: macos-latest
-            arch: arm64
-          - os: ubuntu-latest
-            arch: arm64
-          - os: ubuntu-latest
-            arch: arm
+          - arm64
+          - arm
       fail-fast: false
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20.19.0'
-
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
           pip install setuptools
-
+        shell: bash
       - name: Install cross-compilers for Linux ARM
-        if: matrix.os == 'ubuntu-latest' && (matrix.arch == 'arm' || matrix.arch == 'arm64')
+        if: matrix.arch == 'arm' || matrix.arch == 'arm64'
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf libc6-dev-armel-cross libc6-dev-armhf-cross          
-          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
-
+          if [ "${{ matrix.arch }}" == "arm" ]; then
+            sudo apt-get install -y gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf libc6-dev-armhf-cross
+          else
+            sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libc6-dev-arm64-cross
+          fi
+        shell: bash
       - name: Install dependencies
         run: npm install
-
-      - name: Configure build for Unix
-        if: matrix.os != 'windows-latest'
+        shell: bash
+      - name: Configure build
         run: |
-          if [ "${{ matrix.os }}" == "ubuntu-latest" ] && [ "${{ matrix.arch }}" == "arm" ]; then
+          if [ "${{ matrix.arch }}" == "arm" ]; then
             export CC=arm-linux-gnueabihf-gcc
             export CXX=arm-linux-gnueabihf-g++
             export LINK=arm-linux-gnueabihf-g++
             npm run configure -- --arch=arm
-          elif [ "${{ matrix.os }}" == "ubuntu-latest" ] && [ "${{ matrix.arch }}" == "arm64" ]; then
+          elif [ "${{ matrix.arch }}" == "arm64" ]; then
             export CC=aarch64-linux-gnu-gcc
             export CXX=aarch64-linux-gnu-g++
             export LINK=aarch64-linux-gnu-g++
             npm run configure -- --arch=arm64
-          elif [ "${{ matrix.arch }}" != "x64" ]; then
-            npm run configure -- --arch=${{ matrix.arch }}
           else
             npm run configure
           fi
         shell: bash
-
-      - name: Configure build for Windows
-        if: matrix.os == 'windows-latest'
-        run: npm run configure
-        shell: pwsh      
-
-      - name: Determine output directory (Unix)
-        if: matrix.os != 'windows-latest'
-        id: set-output-dir-unix
+      - name: Determine output directory
+        id: set-output-dir
         run: |
-          if [ "${{ matrix.os }}" == "macos-latest" ] && [ "${{ matrix.arch }}" == "x64" ]; then
-            echo "output_dir=macos_x64" >> $GITHUB_OUTPUT
-          elif [ "${{ matrix.os }}" == "macos-latest" ] && [ "${{ matrix.arch }}" == "arm64" ]; then
-            echo "output_dir=macos_arm64" >> $GITHUB_OUTPUT
-          elif [ "${{ matrix.os }}" == "ubuntu-latest" ] && [ "${{ matrix.arch }}" == "x64" ]; then
+          if [ "${{ matrix.arch }}" == "x64" ]; then
             echo "output_dir=linux_x64" >> $GITHUB_OUTPUT
-          elif [ "${{ matrix.os }}" == "ubuntu-latest" ] && [ "${{ matrix.arch }}" == "arm64" ]; then
+          elif [ "${{ matrix.arch }}" == "arm64" ]; then
             echo "output_dir=linux_arm64" >> $GITHUB_OUTPUT
-          elif [ "${{ matrix.os }}" == "ubuntu-latest" ] && [ "${{ matrix.arch }}" == "arm" ]; then
+          else
             echo "output_dir=linux_arm" >> $GITHUB_OUTPUT
           fi
         shell: bash
-
-      - name: Determine output directory (Windows)
-        if: matrix.os == 'windows-latest'
-        id: set-output-dir-windows
-        run: |
-          if ("${{ matrix.arch }}" -eq "x64") {
-            echo "output_dir=windows_x64" >> $env:GITHUB_OUTPUT
-          }
-        shell: pwsh
-
       - name: Check library format for ARM
-        if: matrix.os == 'ubuntu-latest' && matrix.arch == 'arm'
+        if: matrix.arch == 'arm'
         run: |
           file lib/build/libiec61850-ubuntu-latest-arm.a
           readelf -h lib/build/libiec61850-ubuntu-latest-arm.a || true
         shell: bash
-
       - name: Check library format for ARM64
-        if: matrix.os == 'ubuntu-latest' && matrix.arch == 'arm64'
+        if: matrix.arch == 'arm64'
         run: |
           file lib/build/libiec61850-ubuntu-latest-arm64.a
           readelf -h lib/build/libiec61850-ubuntu-latest-arm64.a || true
         shell: bash
-
       - name: Prebuild binaries for Node.js 20
-        if: matrix.os != 'windows-latest'
         run: |
-          if [ "${{ matrix.os }}" == "macos-latest" ] && [ "${{ matrix.arch }}" == "x64" ]; then
-            arch -x86_64 npm run prebuild -- --target 20.19.0 --arch x64 --macos-min-version=11.0
-          elif [ "${{ matrix.os }}" == "ubuntu-latest" ] && [ "${{ matrix.arch }}" == "arm" ]; then
+          if [ "${{ matrix.arch }}" == "arm" ]; then
             export CC=arm-linux-gnueabihf-gcc
             export CXX=arm-linux-gnueabihf-g++
             export LINK=arm-linux-gnueabihf-g++
             npm run prebuild -- --target 20.19.0 --arch arm --cflags="-march=armv7-a -mfpu=vfp -mfloat-abi=hard"
-          elif [ "${{ matrix.os }}" == "ubuntu-latest" ] && [ "${{ matrix.arch }}" == "arm64" ]; then
+          elif [ "${{ matrix.arch }}" == "arm64" ]; then
             export CC=aarch64-linux-gnu-gcc
             export CXX=aarch64-linux-gnu-g++
             export LINK=aarch64-linux-gnu-g++
             npm run prebuild -- --target 20.19.0 --arch arm64
           else
-            npm run prebuild -- --target 20.19.0 --arch ${{ matrix.arch }}
+            npm run prebuild -- --target 20.19.0 --arch x64
           fi
         shell: bash
-
-      - name: Prebuild binaries for Node.js 20 (Windows)
-        if: matrix.os == 'windows-latest'
-        run: |
-          npm run prebuild -- --arch x64
-        shell: pwsh
-
       - name: Get package version
         id: package-version
         run: echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
         shell: bash
-
       - name: Get prebuild file
         id: get-prebuild
         run: |
           echo "file=$(ls prebuilds/@amigo9090/ih-libiec61850-node-v${{ steps.package-version.outputs.version }}-node-v*.tar.gz | head -n 1)" >> $GITHUB_OUTPUT
         shell: bash
-
-      - name: Determine platform for artifact name (Unix)
-        if: matrix.os != 'windows-latest'
-        id: determine-platform-unix
-        run: |
-          if [ "${{ matrix.os }}" == "ubuntu-latest" ]; then
-            echo "platform=linux" >> $GITHUB_OUTPUT
-          elif [ "${{ matrix.os }}" == "macos-latest" ]; then
-            echo "platform=darwin" >> $GITHUB_OUTPUT
-          fi
+      - name: Determine platform for artifact name
+        id: determine-platform
+        run: echo "platform=linux" >> $GITHUB_OUTPUT
         shell: bash
-
-      - name: Determine platform for artifact name (Windows)
-        if: matrix.os == 'windows-latest'
-        id: determine-platform-windows
-        run: |
-          if ("${{ matrix.os }}" -eq "windows-latest") {
-            echo "platform=win32" >> $env:GITHUB_OUTPUT
-          }
-        shell: pwsh
-
       - name: Upload prebuilt binaries to GitHub Releases
         uses: softprops/action-gh-release@v2
         env:
@@ -235,7 +156,113 @@ jobs:
         with:
           tag_name: v${{ steps.package-version.outputs.version }}
           files: ${{ steps.get-prebuild.outputs.file }}
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: addon_iec61850-ubuntu-latest-${{ matrix.arch }}
+          path: ${{ steps.get-prebuild.outputs.file }}
 
+  non-linux-build-and-upload:
+    needs: create-release
+    runs-on: ${{ matrix.os }}
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    strategy:
+      matrix:
+        os:
+          - windows-latest
+          - macos-latest
+        arch:
+          - x64
+        include:
+          - os: macos-latest
+            arch: arm64
+      fail-fast: false
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.19.0'
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install setuptools
+        shell: bash
+      - name: Install dependencies
+        run: npm install
+        shell: bash
+      - name: Configure build for Unix
+        if: matrix.os != 'windows-latest'
+        run: |
+          if [ "${{ matrix.arch }}" != "x64" ]; then
+            npm run configure -- --arch=${{ matrix.arch }}
+          else
+            npm run configure
+          fi
+        shell: bash
+      - name: Configure build for Windows
+        if: matrix.os == 'windows-latest'
+        run: npm run configure
+        shell: pwsh
+      - name: Determine output directory (Unix)
+        if: matrix.os != 'windows-latest'
+        id: set-output-dir-unix
+        run: |
+          if [ "${{ matrix.arch }}" == "x64" ]; then
+            echo "output_dir=macos_x64" >> $GITHUB_OUTPUT
+          else
+            echo "output_dir=macos_arm64" >> $GITHUB_OUTPUT
+          fi
+        shell: bash
+      - name: Determine output directory (Windows)
+        if: matrix.os == 'windows-latest'
+        id: set-output-dir-windows
+        run: echo "output_dir=windows_x64" >> $env:GITHUB_OUTPUT
+        shell: pwsh
+      - name: Prebuild binaries for Node.js 20
+        if: matrix.os != 'windows-latest'
+        run: |
+          if [ "${{ matrix.arch }}" == "x64" ]; then
+            arch -x86_64 npm run prebuild -- --target 20.19.0 --arch x64 --macos-min-version=11.0
+          else
+            npm run prebuild -- --target 20.19.0 --arch ${{ matrix.arch }}
+          fi
+        shell: bash
+      - name: Prebuild binaries for Node.js 20 (Windows)
+        if: matrix.os == 'windows-latest'
+        run: npm run prebuild -- --arch x64
+        shell: pwsh
+      - name: Get package version
+        id: package-version
+        run: echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
+        shell: bash
+      - name: Get prebuild file
+        id: get-prebuild
+        run: |
+          echo "file=$(ls prebuilds/@amigo9090/ih-libiec61850-node-v${{ steps.package-version.outputs.version }}-node-v*.tar.gz | head -n 1)" >> $GITHUB_OUTPUT
+        shell: bash
+      - name: Determine platform for artifact name (Unix)
+        if: matrix.os != 'windows-latest'
+        id: determine-platform-unix
+        run: echo "platform=darwin" >> $GITHUB_OUTPUT
+        shell: bash
+      - name: Determine platform for artifact name (Windows)
+        if: matrix.os == 'windows-latest'
+        id: determine-platform-windows
+        run: echo "platform=win32" >> $env:GITHUB_OUTPUT
+        shell: pwsh
+      - name: Upload prebuilt binaries to GitHub Releases
+        uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        with:
+          tag_name: v${{ steps.package-version.outputs.version }}
+          files: ${{ steps.get-prebuild.outputs.file }}
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -243,7 +270,7 @@ jobs:
           path: ${{ steps.get-prebuild.outputs.file }}
 
   update-builds-and-publish:
-    needs: build-and-upload
+    needs: [create-release, linux-build-and-upload, non-linux-build-and-upload]
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
@@ -251,46 +278,38 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20.19.0'
           registry-url: 'https://registry.npmjs.org'
-
       - name: Install semver
         run: npm install -g semver
         shell: bash
-
       - name: Debug npm config
         run: npm config list
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
       - name: Verify npm authentication
         run: npm whoami
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
       - name: Get package version
         id: package-version
         run: echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
         shell: bash
-
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts
-
       - name: Install jq
         run: sudo apt-get update && sudo apt-get install -y jq
-
+        shell: bash
       - name: Update builds folder
         run: |
           # Очищаем папку builds, если она существует
           rm -rf builds
           mkdir -p builds
-
           # Карта соответствий для именования папок
           declare -A platform_map=(
             ["linux-arm"]="linux_arm"
@@ -300,7 +319,6 @@ jobs:
             ["darwin-x64"]="macos_x64"
             ["win32-x64"]="windows_x64"
           )
-
           # Перебираем все скачанные артефакты
           for artifact_dir in artifacts/addon_iec61850-*; do
             if [ -d "$artifact_dir" ]; then
@@ -326,13 +344,11 @@ jobs:
             fi
           done
         shell: bash
-
       - name: Copy iec61850.dll for Windows
         run: |
           mkdir -p builds/windows_x64
           cp lib/build/iec61850.dll builds/windows_x64/iec61850.dll
         shell: bash
-
       - name: Verify iec61850.dll is copied
         run: |
           if [ ! -f "builds/windows_x64/iec61850.dll" ]; then
@@ -340,7 +356,6 @@ jobs:
             exit 1
           fi
         shell: bash
-
       - name: Verify builds folder
         run: |
           for dir in linux_arm linux_arm64 linux_x64 macos_arm64 macos_x64 windows_x64; do
@@ -355,19 +370,16 @@ jobs:
             fi
           done
         shell: bash
-
       - name: Sync with origin/main
         run: |
           git fetch origin
           git reset --hard origin/main
         shell: bash
-
       - name: Delete existing tag if it exists
         run: |
           git tag -d v$(node -p "require('./package.json').version") || true
           git push origin :refs/tags/v$(node -p "require('./package.json').version") || true
         shell: bash
-
       - name: Publish to npm
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -375,21 +387,21 @@ jobs:
           # Настраиваем Git для коммитов
           git config --global user.name "GitHub Actions"
           git config --global user.email "actions@github.com"
-          
+         
           # Получаем последнюю версию пакета из npm
           LATEST_VERSION=$(npm view @amigo9090/ih-libiec61850-node version || echo "0.0.0")
           echo "Последняя версия в npm: $LATEST_VERSION"
-          
+         
           # Получаем текущую версию из package.json
           CURRENT_VERSION=$(node -p "require('./package.json').version")
           echo "Текущая версия в package.json: $CURRENT_VERSION"
-          
+         
           # Проверяем, совпадает ли версия в package.json с последней в npm
           if [ "$CURRENT_VERSION" = "$LATEST_VERSION" ]; then
             # Увеличиваем версию
             NEW_VERSION=$(npx semver -i patch $LATEST_VERSION)
             echo "Новая версия: $NEW_VERSION"
-            
+           
             # Обновляем версию в package.json
             npm version $NEW_VERSION --no-git-tag-version
             git add package.json package-lock.json
@@ -399,7 +411,7 @@ jobs:
             echo "Версия в package.json ($CURRENT_VERSION) не совпадает с npm ($LATEST_VERSION). Пропускаем обновление версии."
             NEW_VERSION=$CURRENT_VERSION
           fi
-          
+         
           # Проверяем наличие изменений в builds/
           if git status --porcelain builds/ | grep .; then
             git add builds/
@@ -408,13 +420,13 @@ jobs:
           else
             echo "Нет изменений для коммита в builds/"
           fi
-          
+         
           # Создаем временную копию package.json без scripts и devDependencies
           jq 'del(.scripts) | del(.devDependencies)' package.json > package_npm.json
-          
+         
           # Заменяем package.json на версию без scripts и devDependencies
           mv package_npm.json package.json
-          
+         
           # Проверяем, существует ли версия в npm
           if npm view @amigo9090/ih-libiec61850-node@$NEW_VERSION version > /dev/null 2>&1; then
             echo "Версия $NEW_VERSION уже существует в npm. Пропускаем публикацию."
@@ -422,13 +434,11 @@ jobs:
           else
             npm publish --access public
           fi
-          
+         
           # Создаем тег для новой версии
           git tag v$NEW_VERSION
           git push origin v$NEW_VERSION
-          
+         
           # Восстанавливаем оригинальный package.json
           git checkout -- package.json
         shell: bash
-
-
