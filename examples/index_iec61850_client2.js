@@ -1,4 +1,4 @@
-const { MmsClient } = require('../build/Release/addon_iec61850');
+const { MmsClient } = require('@amigo9090/ih-libiec61850-node'); //../build/Release/addon_iec61850
 const util = require('util');
 
 const client = new MmsClient((event, data) => {
