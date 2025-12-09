@@ -17,7 +17,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20.19.0'
+          node-version: '18.20.8'
       - name: Get package version
         id: package-version
         run: echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
@@ -58,22 +58,18 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20.19.0'
-      - name: Install Python 3.11 via PPA
+          node-version: '18.20.8'
+      - name: Install Python 3.9 dependencies
         run: |
           apt-get update
-          apt-get install -y software-properties-common
-          add-apt-repository ppa:deadsnakes/ppa -y
-          apt-get update
-          apt-get install -y python3.11 python3.11-venv python3.11-dev
+          apt-get install -y python3-pip python3-venv python3-dev
         shell: bash
       - name: Install Python dependencies
         run: |
-          python3.11 -m ensurepip --upgrade
-          python3.11 -m pip install --upgrade pip setuptools
+          python3 -m pip install --upgrade pip setuptools
         shell: bash
       - name: Verify Python version
-        run: python3.11 --version && ldd --version
+        run: python3 --version && ldd --version
         shell: bash
       - name: Install cross-compilers for Linux ARM
         if: matrix.arch == 'arm' || matrix.arch == 'arm64'
@@ -127,20 +123,20 @@ jobs:
           file lib/build/libiec61850-ubuntu-latest-arm64.a
           readelf -h lib/build/libiec61850-ubuntu-latest-arm64.a || true
         shell: bash
-      - name: Prebuild binaries for Node.js 20
+      - name: Prebuild binaries for Node.js 18
         run: |
           if [ "${{ matrix.arch }}" == "arm" ]; then
             export CC=arm-linux-gnueabihf-gcc
             export CXX=arm-linux-gnueabihf-g++
             export LINK=arm-linux-gnueabihf-g++
-            npm run prebuild -- --target 20.19.0 --arch arm --cflags="-march=armv7-a -mfpu=vfp -mfloat-abi=hard"
+            npm run prebuild -- --target 18.20.8 --arch arm --cflags="-march=armv7-a -mfpu=vfp -mfloat-abi=hard"
           elif [ "${{ matrix.arch }}" == "arm64" ]; then
             export CC=aarch64-linux-gnu-gcc
             export CXX=aarch64-linux-gnu-g++
             export LINK=aarch64-linux-gnu-g++
-            npm run prebuild -- --target 20.19.0 --arch arm64
+            npm run prebuild -- --target 18.20.8 --arch arm64
           else
-            npm run prebuild -- --target 20.19.0 --arch x64
+            npm run prebuild -- --target 18.20.8 --arch x64
           fi
         shell: bash
       - name: Get package version
@@ -190,7 +186,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20.19.0'
+          node-version: '18.20.8'
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
@@ -235,9 +231,9 @@ jobs:
         if: matrix.os != 'windows-latest'
         run: |
           if [ "${{ matrix.arch }}" == "x64" ]; then
-            arch -x86_64 npm run prebuild -- --target 20.19.0 --arch x64 --macos-min-version=11.0
+            arch -x86_64 npm run prebuild -- --target 18.20.8 --arch x64 --macos-min-version=11.0
           else
-            npm run prebuild -- --target 20.19.0 --arch ${{ matrix.arch }}
+            npm run prebuild -- --target 18.20.8 --arch ${{ matrix.arch }}
           fi
         shell: bash
       - name: Prebuild binaries for Node.js 20 (Windows)
@@ -288,7 +284,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20.19.0'
+          node-version: '18.20.8'
           registry-url: 'https://registry.npmjs.org'
       - name: Install semver
         run: npm install -g semver
