@@ -1,4 +1,4 @@
-const { MmsClient } = require('@amigo9090/ih-libiec61850-node'); //../build/Release/addon_iec61850
+const { MmsClient } = require('../build/Release/addon_iec61850'); //../build/Release/addon_iec61850
 const util = require('util');
 
 const client = new MmsClient((event, data) => {
@@ -104,11 +104,11 @@ async function handleConnectionOpened() {
         });
 
         // Пакетное чтение датасетов
-        if (dataSets.length > 0) {
-            console.log('Reading datasets in batch...');
-            const dataSetRefs = dataSets.map(ds => ds.reference);
-            await client.readDataSetValues(dataSetRefs);
-        }
+        //if (dataSets.length > 0) {
+        //    console.log('Reading datasets in batch...');
+        //    const dataSetRefs = dataSets.map(ds => ds.reference);
+        //    await client.readDataSetValues(dataSetRefs);
+        //}
 
         // Читаем все DataSet'ы одним вызовом
         console.log('\nЧтение значений DataSet...');
@@ -136,7 +136,8 @@ async function handleConnectionOpened() {
             'WAGO61850ServerDevice/GGIO1.Ind.stVal',
             'WAGO61850ServerDevice/CALH1.GrAlm.stVal'
         ];
-        await client.readData(dataRefs);
+        const readRefResult = await client.readData(dataRefs); 
+        console.log("readRefResult " + util.inspect(readRefResult));
 
         // Включение отчётности
         const rcbRef = 'WAGO61850ServerDevice/LLN0.RP.ReportBlock0101';

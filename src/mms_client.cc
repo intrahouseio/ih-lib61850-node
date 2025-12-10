@@ -1007,160 +1007,179 @@ Napi::Value MmsClient::GetDataSetDirectory(const Napi::CallbackInfo& info) {
     }
 }
 
-Napi::Value MmsClient::ReadData(const Napi::CallbackInfo& info) {
+
+/*Napi::Value MmsClient::ReadData(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
-    // Проверяем, передан ли массив dataRefs или одиночный dataRef
+
     if (info.Length() < 1) {
-        Napi::TypeError::New(env, "Expected dataRef (string) or dataRefs (array of strings)").ThrowAsJavaScriptException();
+        Napi::TypeError::New(env, "Expected dataRef (string) or array of strings").ThrowAsJavaScriptException();
         return env.Undefined();
     }
-   
+
     std::vector<std::string> dataRefs;
-   
+
     if (info[0].IsString()) {
-        // Одиночный dataRef
-        std::string dataRef = info[0].As<Napi::String>().Utf8Value();
-        dataRefs.push_back(dataRef);
+        dataRefs.push_back(info[0].As<Napi::String>().Utf8Value());
     } else if (info[0].IsArray()) {
-        // Массив dataRefs
-        Napi::Array dataRefsArray = info[0].As<Napi::Array>();
-        for (uint32_t i = 0; i < dataRefsArray.Length(); i++) {
-            if (dataRefsArray.Get(i).IsString()) {
-                dataRefs.push_back(dataRefsArray.Get(i).As<Napi::String>().Utf8Value());
-            } else {
-                Napi::TypeError::New(env, "Expected each dataRef to be a string").ThrowAsJavaScriptException();
+        Napi::Array arr = info[0].As<Napi::Array>();
+        for (uint32_t i = 0; i < arr.Length(); ++i) {
+            if (!arr.Get(i).IsString()) {
+                Napi::TypeError::New(env, "All elements must be strings").ThrowAsJavaScriptException();
                 return env.Undefined();
+            }
+            dataRefs.push_back(arr.Get(i).As<Napi::String>().Utf8Value());
+        }
+    } else {
+        Napi::TypeError::New(env, "Expected string or array of strings").ThrowAsJavaScriptException();
+        return env.Undefined();
+    }
+
+    std::lock_guard<std::mutex> lock(connMutex_);
+    if (!connected_) {
+        Napi::Error::New(env, "Client not connected").ThrowAsJavaScriptException();
+        return env.Null();
+    }
+
+    Napi::Array results = Napi::Array::New(env, dataRefs.size());
+
+    for (size_t i = 0; i < dataRefs.size(); ++i) {
+        {
+        const std::string& ref = dataRefs[i];
+        Napi::Object result = Napi::Object::New(env);
+        result.Set("dataRef", Napi::String::New(env, ref));
+
+        IedClientError error;
+        FunctionalConstraint fc = IEC61850_FC_ST;
+
+        // Автоопределение FC (как было)
+        if (ref.find(".ctlModel") != std::string::npos) fc = IEC61850_FC_CF;
+        else if (ref.find(".Oper") != std::string::npos) fc = IEC61850_FC_CO;
+        else if (ref.find(".SPCSO") != std::string::npos) fc = IEC61850_FC_ST;
+        else if (ref.find(".AnIn") != std::string::npos) fc = IEC61850_FC_MX;
+        else if (ref.find(".NamPlt") != std::string::npos || ref.find(".PhyNam") != std::string::npos) fc = IEC61850_FC_DC;
+
+        MmsValue* value = nullptr;
+        std::vector<FunctionalConstraint> fcs = {
+            fc, IEC61850_FC_ALL, IEC61850_FC_ST, IEC61850_FC_MX,
+            IEC61850_FC_DC, IEC61850_FC_SP, IEC61850_FC_CO, IEC61850_FC_CF
+        };
+
+        for (auto tryFc : fcs) {
+            value = IedConnection_readObject(connection_, &error, ref.c_str(), tryFc);
+            if (error == IED_ERROR_OK && value) break;
+            if (value) MmsValue_delete(value);
+        }
+
+        if (error != IED_ERROR_OK || !value) {
+            result.Set("isValid", false);
+            result.Set("errorReason", Napi::String::New(env, "Read failed: error " + std::to_string(error)));
+        } else {
+            MmsClient::ResultData resData = ConvertMmsValueToResultData(value, ref.substr(ref.rfind(".") + 1));
+            result.Set("isValid", true);
+            result.Set("value", ResultDataToNapi(env, resData));
+            MmsValue_delete(value);
+        }
+
+        results.Set(i, result);
+    }
+
+    // Отправляем событие через tsfn (опционально)
+    tsfn_.NonBlockingCall([this, dataRefs, results](Napi::Env env, Napi::Function jsCallback) {
+        try {
+            Napi::Object eventObj = Napi::Object::New(env);
+            eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
+            eventObj.Set("type", Napi::String::New(env, "data"));
+            eventObj.Set("event", dataRefs.size() == 1 ? "data" : "batchData");
+
+            Napi::Array refsArr = Napi::Array::New(env, dataRefs.size());
+            Napi::Array valsArr = Napi::Array::New(env, dataRefs.size());
+            for (size_t i = 0; i < dataRefs.size(); ++i) {
+                Napi::Object res = results.Get(i).As<Napi::Object>();
+                refsArr.Set(i, Napi::String::New(env, dataRefs[i]));
+                valsArr.Set(i, res);
+            }
+            eventObj.Set(dataRefs.size() == 1 ? "dataRef" : "dataRefs", refsArr);
+            eventObj.Set("values", valsArr);
+
+            jsCallback.Call({ Napi::String::New(env, "data"), eventObj });
+        } catch (...) {}
+    });
+
+    // Возвращаем результат синхронно
+    return results;
+    }
+}*/
+
+Napi::Value MmsClient::ReadData(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+
+    if (info.Length() < 1) {
+        Napi::TypeError::New(env, "Expected dataRef or array of dataRefs").ThrowAsJavaScriptException();
+        return env.Undefined();
+    }
+
+    std::vector<std::string> dataRefs;
+    if (info[0].IsString()) {
+        dataRefs.push_back(info[0].As<Napi::String>().Utf8Value());
+    } else if (info[0].IsArray()) {
+        Napi::Array arr = info[0].As<Napi::Array>();
+        for (uint32_t i = 0; i < arr.Length(); ++i) {
+            if (arr.Get(i).IsString()) {
+                dataRefs.push_back(arr.Get(i).As<Napi::String>().Utf8Value());
             }
         }
     } else {
-        Napi::TypeError::New(env, "Expected dataRef (string) or dataRefs (array of strings)").ThrowAsJavaScriptException();
+        Napi::TypeError::New(env, "Expected string or array").ThrowAsJavaScriptException();
         return env.Undefined();
     }
+
     std::lock_guard<std::mutex> lock(connMutex_);
     if (!connected_) {
-        printf("ReadData: Not connected, clientID: %s\n", clientID_.c_str());
         Napi::Error::New(env, "Not connected").ThrowAsJavaScriptException();
-        return env.Undefined();
+        return env.Null();
     }
-    try {
-        std::vector<ResultData> results;
-       
-        for (const auto& dataRef : dataRefs) {
-            IedClientError error;
-            FunctionalConstraint fc = IEC61850_FC_ST;
-           
-            // Определяем Functional Constraint на основе dataRef
-            if (dataRef.find(".SPCSO") != std::string::npos) {
-                fc = IEC61850_FC_ST;
-            } else if (dataRef.find(".AnIn") != std::string::npos) {
-                fc = IEC61850_FC_MX;
-            } else if (dataRef.find(".NamPlt") != std::string::npos || dataRef.find(".PhyNam") != std::string::npos) {
-                fc = IEC61850_FC_DC;
-            } else if (dataRef.find(".Mod") != std::string::npos || dataRef.find(".Proxy") != std::string::npos) {
-                fc = IEC61850_FC_ST;
-            } else if (dataRef.find(".Oper") != std::string::npos) {
-                fc = IEC61850_FC_CO;
-            } else if (dataRef.find(".ctlModel") != std::string::npos) {
-                fc = IEC61850_FC_CF;
-            }
-            MmsValue* value = nullptr;
-            std::vector<FunctionalConstraint> fcs = {
-                fc, IEC61850_FC_ALL, IEC61850_FC_ST, IEC61850_FC_MX,
-                IEC61850_FC_DC, IEC61850_FC_SP, IEC61850_FC_CO, IEC61850_FC_CF
-            };
-           
-            // Пытаемся прочитать с разными FC
-            for (auto tryFc : fcs) {
-                value = IedConnection_readObject(connection_, &error, dataRef.c_str(), tryFc);
-                if (error == IED_ERROR_OK && value != nullptr) {
-                    printf("ReadData: Succeeded with FC %d for dataRef %s, clientID: %s\n", tryFc, dataRef.c_str(), clientID_.c_str());
-                    break;
-                }
-                printf("ReadData: Failed with FC %d for dataRef %s, error: %d, clientID: %s\n", tryFc, dataRef.c_str(), error, clientID_.c_str());
-            }
-            if (error != IED_ERROR_OK || value == nullptr) {
-                printf("Read failed for dataRef: %s, final error: %d, clientID: %s\n", dataRef.c_str(), error, clientID_.c_str());
-                ResultData resultData;
-                resultData.isValid = false;
-                resultData.errorReason = "Read failed: error " + std::to_string(error);
-                results.push_back(resultData);
-                continue;
-            }
-            // Используем общую функцию конвертации
-            ResultData resultData = ConvertMmsValueToResultData(value, dataRef.substr(dataRef.rfind(".") + 1));
-            results.push_back(resultData);
+
+    Napi::Array results = Napi::Array::New(env, dataRefs.size());
+
+    for (size_t i = 0; i < dataRefs.size(); ++i) {
+        const std::string& ref = dataRefs[i];
+        Napi::Object item = Napi::Object::New(env);
+        item.Set("dataRef", Napi::String::New(env, ref));
+
+        IedClientError error;
+        MmsValue* value = nullptr;
+
+        // Попробуем разные FC
+        std::vector<FunctionalConstraint> fcs = {
+            IEC61850_FC_ST, IEC61850_FC_MX, IEC61850_FC_SP,
+            IEC61850_FC_CF, IEC61850_FC_DC, IEC61850_FC_SG,
+            IEC61850_FC_CO, IEC61850_FC_ALL
+        };
+
+        for (auto fc : fcs) {
+            value = IedConnection_readObject(connection_, &error, ref.c_str(), fc);
+            if (error == IED_ERROR_OK && value) break;
+            if (value) { MmsValue_delete(value); value = nullptr; }
+        }
+
+        if (!value || error != IED_ERROR_OK) {
+            item.Set("isValid", false);
+            item.Set("errorReason", Napi::String::New(env,
+                "Read failed (error " + std::to_string(error) + ")"));
+            item.Set("value", env.Null());
+        } else {
+            MmsClient::ResultData resData = ConvertMmsValueToResultData(value, ref);
+            item.Set("isValid", true);
+            item.Set("value", ResultDataToNapi(env, resData));
             MmsValue_delete(value);
         }
-       
-        // Определяем тип события в зависимости от количества dataRefs
-        std::string eventType = (dataRefs.size() == 1) ? "data" : "batchData";
-       
-        // Отправка события через TSFN
-        tsfn_.NonBlockingCall([this, dataRefs, results, eventType](Napi::Env env, Napi::Function jsCallback) {
-            try {
-                Napi::Object eventObj = Napi::Object::New(env);
-                eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
-                eventObj.Set("type", Napi::String::New(env, "data"));
-                eventObj.Set("event", Napi::String::New(env, eventType));
-               
-                if (eventType == "data") {
-                    // Для одиночного dataRef сохраняем обратную совместимость
-                    eventObj.Set("dataRef", Napi::String::New(env, dataRefs[0]));
-                   
-                    Napi::Value result = ResultDataToNapi(env, results[0]);
-                    eventObj.Set("value", result);
-                    eventObj.Set("isValid", Napi::Boolean::New(env, results[0].isValid));
-                } else {
-                    // Для множественных dataRefs
-                    Napi::Array dataRefsArray = Napi::Array::New(env, dataRefs.size());
-                    for (size_t i = 0; i < dataRefs.size(); i++) {
-                        dataRefsArray.Set(uint32_t(i), Napi::String::New(env, dataRefs[i]));
-                    }
-                    eventObj.Set("dataRefs", dataRefsArray);
-                   
-                    Napi::Array valuesArray = Napi::Array::New(env, results.size());
-                    for (size_t i = 0; i < results.size(); i++) {
-                        const ResultData& resultData = results[i];
-                        if (!resultData.isValid) {
-                            // Для невалидных данных отправляем объект с ошибкой
-                            Napi::Object errorObj = Napi::Object::New(env);
-                            errorObj.Set("isValid", Napi::Boolean::New(env, false));
-                            errorObj.Set("errorReason", Napi::String::New(env, resultData.errorReason));
-                            valuesArray.Set(uint32_t(i), errorObj);
-                        } else {
-                            Napi::Value result = ResultDataToNapi(env, resultData);
-                            Napi::Object resultObj = Napi::Object::New(env);
-                            resultObj.Set("value", result);
-                            resultObj.Set("isValid", Napi::Boolean::New(env, true));
-                            valuesArray.Set(uint32_t(i), resultObj);
-                        }
-                    }
-                    eventObj.Set("values", valuesArray);
-                }
-               
-                jsCallback.Call({Napi::String::New(env, "data"), eventObj});
-            } catch (const Napi::Error& e) {
-                printf("N-API Callback Error in ReadData: %s, clientID: %s\n", e.Message().c_str(), clientID_.c_str());
-            }
-        });
-       
-        return env.Undefined();
-    } catch (const std::exception& e) {
-        printf("Exception in ReadData: %s, clientID: %s\n", e.what(), clientID_.c_str());
-        tsfn_.NonBlockingCall([this, e](Napi::Env env, Napi::Function jsCallback) {
-            try {
-                Napi::Object eventObj = Napi::Object::New(env);
-                eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
-                eventObj.Set("type", Napi::String::New(env, "error"));
-                eventObj.Set("reason", Napi::String::New(env, std::string("Exception in ReadData: ") + e.what()));
-                jsCallback.Call({Napi::String::New(env, "data"), eventObj});
-            } catch (const Napi::Error& e) {
-                printf("N-API Callback Error in ReadData: %s, clientID: %s\n", e.Message().c_str(), clientID_.c_str());
-            }
-        });
-        return env.Undefined();
+
+        results.Set(static_cast<uint32_t>(i), item);  // ← ВСЕГДА заполняем
     }
+
+    return results;  // ← синхронный возврат
 }
+
 
 
 Napi::Value MmsClient::ControlObject(const Napi::CallbackInfo& info) {
@@ -1900,10 +1919,9 @@ void MmsClient::ReportCallback(void* parameter, ClientReport report) {
     });
 }
 
-
-
 Napi::Value MmsClient::EnableReporting(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
+
     if (info.Length() < 2 || !info[0].IsString() || !info[1].IsString()) {
         Napi::TypeError::New(env, "Expected rcbRef (string) and datasetRef (string)").ThrowAsJavaScriptException();
         return env.Undefined();
@@ -1919,170 +1937,119 @@ Napi::Value MmsClient::EnableReporting(const Napi::CallbackInfo& info) {
         return env.Undefined();
     }
 
-    try {
-        IedClientError error;
-
-        // Check if report is already enabled
-        if (activeReports_.find(rcbRef) != activeReports_.end()) {
-            printf("EnableReporting: Report already enabled for %s, clientID: %s\n", rcbRef.c_str(), clientID_.c_str());
-            Napi::Error::New(env, "Report already enabled for " + rcbRef).ThrowAsJavaScriptException();
-            return env.Undefined();
-        }
-
-        // Read dataset directory
-        LinkedList dataSetDirectory = IedConnection_getDataSetDirectory(connection_, &error, datasetRef.c_str(), nullptr);
-        if (error != IED_ERROR_OK || dataSetDirectory == nullptr) {
-            printf("EnableReporting: Failed to read dataset directory for %s, error: %d, clientID: %s\n", datasetRef.c_str(), error, clientID_.c_str());
-            tsfn_.NonBlockingCall([this, datasetRef, error](Napi::Env env, Napi::Function jsCallback) {
-                try {
-                    Napi::Object eventObj = Napi::Object::New(env);
-                    eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
-                    eventObj.Set("type", Napi::String::New(env, "error"));
-                    eventObj.Set("reason", Napi::String::New(env, "Failed to read dataset directory for " + datasetRef + ", error: " + std::to_string(error)));
-                    jsCallback.Call({Napi::String::New(env, "data"), eventObj});
-                } catch (const Napi::Error& e) {
-                    printf("N-API Callback Error in EnableReporting: %s, clientID: %s\n", e.Message().c_str(), clientID_.c_str());
-                }
-            });
-            return env.Undefined();
-        }
-
-        // Read dataset
-        ClientDataSet clientDataSet = IedConnection_readDataSetValues(connection_, &error, datasetRef.c_str(), nullptr);
-        if (error != IED_ERROR_OK || clientDataSet == nullptr) {
-            printf("EnableReporting: Failed to read dataset %s, error: %d, clientID: %s\n", datasetRef.c_str(), error, clientID_.c_str());
-            LinkedList_destroy(dataSetDirectory);
-            tsfn_.NonBlockingCall([this, datasetRef, error](Napi::Env env, Napi::Function jsCallback) {
-                try {
-                    Napi::Object eventObj = Napi::Object::New(env);
-                    eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
-                    eventObj.Set("type", Napi::String::New(env, "error"));
-                    eventObj.Set("reason", Napi::String::New(env, "Failed to read dataset " + datasetRef + ", error: " + std::to_string(error)));
-                    jsCallback.Call({Napi::String::New(env, "data"), eventObj});
-                } catch (const Napi::Error& e) {
-                    printf("N-API Callback Error in EnableReporting: %s, clientID: %s\n", e.Message().c_str(), clientID_.c_str());
-                }
-            });
-            return env.Undefined();
-        }
-
-        // Read RCB values
-        ClientReportControlBlock rcb = IedConnection_getRCBValues(connection_, &error, rcbRef.c_str(), nullptr);
-        if (error != IED_ERROR_OK || rcb == nullptr) {
-            printf("EnableReporting: Failed to get RCB values for %s, error: %d, clientID: %s\n", rcbRef.c_str(), error, clientID_.c_str());
-            LinkedList_destroy(dataSetDirectory);
-            ClientDataSet_destroy(clientDataSet);
-            tsfn_.NonBlockingCall([this, rcbRef, error](Napi::Env env, Napi::Function jsCallback) {
-                try {
-                    Napi::Object eventObj = Napi::Object::New(env);
-                    eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
-                    eventObj.Set("type", Napi::String::New(env, "error"));
-                    eventObj.Set("reason", Napi::String::New(env, "Failed to get RCB values for " + rcbRef + ", error: " + std::to_string(error)));
-                    jsCallback.Call({Napi::String::New(env, "data"), eventObj});
-                } catch (const Napi::Error& e) {
-                    printf("N-API Callback Error in EnableReporting: %s, clientID: %s\n", e.Message().c_str(), clientID_.c_str());
-                }
-            });
-            return env.Undefined();
-        }
-
-        // Configure RCB
-        ClientReportControlBlock_setResv(rcb, true);
-        ClientReportControlBlock_setTrgOps(rcb, TRG_OPT_DATA_CHANGED | TRG_OPT_QUALITY_CHANGED | TRG_OPT_GI | TRG_OPT_INTEGRITY);
-        std::string datasetRefMms = datasetRef;
-        //std::replace(datasetRefMms.begin(), datasetRefMms.end(), '.', '$');
-        ClientReportControlBlock_setDataSetReference(rcb, datasetRefMms.c_str());
-        ClientReportControlBlock_setRptEna(rcb, true);
-        ClientReportControlBlock_setIntgPd(rcb, 3000);
-        ClientReportControlBlock_setGI(rcb, true);
-
-        // Install report handler
-        IedConnection_installReportHandler(connection_, rcbRef.c_str(), ClientReportControlBlock_getRptId(rcb), ReportCallback, this);
-
-        // Write RCB parameters
-        IedConnection_setRCBValues(connection_, &error, rcb, RCB_ELEMENT_TRG_OPS | RCB_ELEMENT_RPT_ENA | RCB_ELEMENT_GI | RCB_ELEMENT_INTG_PD, true);
-        if (error != IED_ERROR_OK) {
-            printf("EnableReporting: Failed to set RCB values for %s, error: %d, clientID: %s\n", rcbRef.c_str(), error, clientID_.c_str());
-            ClientReportControlBlock_destroy(rcb);
-            LinkedList_destroy(dataSetDirectory);
-            ClientDataSet_destroy(clientDataSet);
-            tsfn_.NonBlockingCall([this, rcbRef, error](Napi::Env env, Napi::Function jsCallback) {
-                try {
-                    Napi::Object eventObj = Napi::Object::New(env);
-                    eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
-                    eventObj.Set("type", Napi::String::New(env, "error"));
-                    eventObj.Set("reason", Napi::String::New(env, "Failed to set RCB values for " + rcbRef + ", error: " + std::to_string(error)));
-                    jsCallback.Call({Napi::String::New(env, "data"), eventObj});
-                } catch (const Napi::Error& e) {
-                    printf("N-API Callback Error in EnableReporting: %s, clientID: %s\n", e.Message().c_str(), clientID_.c_str());
-                }
-            });
-            return env.Undefined();
-        }
-
-        //Thread_sleep(1000);
-
-        //Trigger GI Report
-        ClientReportControlBlock_setGI(rcb, true);
-        IedConnection_setRCBValues(connection_, &error, rcb, RCB_ELEMENT_GI, true);
-
-         if (error != IED_ERROR_OK) {
-            printf("EnableReporting: Failed to set RCB value RCB_ELEMENT_GI for %s, error: %d, clientID: %s\n", rcbRef.c_str(), error, clientID_.c_str());
-            ClientReportControlBlock_destroy(rcb);
-            LinkedList_destroy(dataSetDirectory);
-            ClientDataSet_destroy(clientDataSet);
-            tsfn_.NonBlockingCall([this, rcbRef, error](Napi::Env env, Napi::Function jsCallback) {
-                try {
-                    Napi::Object eventObj = Napi::Object::New(env);
-                    eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
-                    eventObj.Set("type", Napi::String::New(env, "error"));
-                    eventObj.Set("reason", Napi::String::New(env, "Failed to set RCB value RCB_ELEMENT_GI for " + rcbRef + ", error: " + std::to_string(error)));
-                    jsCallback.Call({Napi::String::New(env, "data"), eventObj});
-                } catch (const Napi::Error& e) {
-                    printf("N-API Callback Error in EnableReporting: %s, clientID: %s\n", e.Message().c_str(), clientID_.c_str());
-                }
-            });
-            return env.Undefined();
-        }
-
-        // Store report info
-        ReportInfo reportInfo;
-        reportInfo.rcb = rcb;
-        reportInfo.dataSet = clientDataSet;
-        reportInfo.dataSetDirectory = dataSetDirectory;
-        reportInfo.rcbRef = rcbRef;
-        activeReports_[rcbRef] = reportInfo;
-
-        printf("EnableReporting: Successfully enabled reporting for %s, clientID: %s\n", rcbRef.c_str(), clientID_.c_str());
-        tsfn_.NonBlockingCall([this, rcbRef](Napi::Env env, Napi::Function jsCallback) {
-            try {
-                Napi::Object eventObj = Napi::Object::New(env);
-                eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
-                eventObj.Set("type", Napi::String::New(env, "control"));
-                eventObj.Set("event", Napi::String::New(env, "reportingEnabled"));
-                eventObj.Set("rcbRef", Napi::String::New(env, rcbRef));
-                jsCallback.Call({Napi::String::New(env, "data"), eventObj});
-            } catch (const Napi::Error& e) {
-                printf("N-API Callback Error in EnableReporting: %s, clientID: %s\n", e.Message().c_str(), clientID_.c_str());
-            }
-        });
-
+    // Проверяем, не включена ли уже отчётность
+    if (activeReports_.find(rcbRef) != activeReports_.end()) {
+        printf("EnableReporting: Report already enabled for %s, clientID: %s\n", rcbRef.c_str(), clientID_.c_str());
+        Napi::Error::New(env, "Report already enabled for " + rcbRef).ThrowAsJavaScriptException();
         return env.Undefined();
-    } catch (const std::exception& e) {
-        printf("EnableReporting: Exception occurred: %s, clientID: %s\n", e.what(), clientID_.c_str());
-        tsfn_.NonBlockingCall([this, e](Napi::Env env, Napi::Function jsCallback) {
-            try {
-                Napi::Object eventObj = Napi::Object::New(env);
-                eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
-                eventObj.Set("type", Napi::String::New(env, "error"));
-                eventObj.Set("reason", Napi::String::New(env, std::string("Exception in EnableReporting: ") + e.what()));
-                jsCallback.Call({Napi::String::New(env, "data"), eventObj});
-            } catch (const Napi::Error& e) {
-                printf("N-API Callback Error in EnableReporting: %s, clientID: %s\n", e.Message().c_str(), clientID_.c_str());
-            }
+    }
+
+    IedClientError error;
+
+    // 1. Читаем DataSet Directory (для сопоставления индексов в отчётах)
+    LinkedList dataSetDirectory = IedConnection_getDataSetDirectory(connection_, &error, datasetRef.c_str(), nullptr);
+    if (error != IED_ERROR_OK || !dataSetDirectory) {
+        printf("EnableReporting: Failed to get dataset directory for %s, error: %d\n", datasetRef.c_str(), error);
+        tsfn_.NonBlockingCall([this, datasetRef, error](Napi::Env env, Napi::Function jsCallback) {
+            Napi::Object obj = Napi::Object::New(env);
+            obj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
+            obj.Set("type", Napi::String::New(env, "error"));
+            obj.Set("reason", Napi::String::New(env, "Failed to get dataset directory for " + datasetRef + ", error: " + std::to_string(error)));
+            jsCallback.Call({ Napi::String::New(env, "data"), obj });
         });
         return env.Undefined();
     }
+
+    // 2. Читаем сам DataSet (нужен для освобождения памяти)
+    ClientDataSet clientDataSet = IedConnection_readDataSetValues(connection_, &error, datasetRef.c_str(), nullptr);
+    if (error != IED_ERROR_OK || !clientDataSet) {
+        printf("EnableReporting: Failed to read dataset %s, error: %d\n", datasetRef.c_str(), error);
+        LinkedList_destroy(dataSetDirectory);
+        tsfn_.NonBlockingCall([this, datasetRef, error](Napi::Env env, Napi::Function jsCallback) {
+            Napi::Object obj = Napi::Object::New(env);
+            obj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
+            obj.Set("type", Napi::String::New(env, "error"));
+            obj.Set("reason", Napi::String::New(env, "Failed to read dataset " + datasetRef + ", error: " + std::to_string(error)));
+            jsCallback.Call({ Napi::String::New(env, "data"), obj });
+        });
+        return env.Undefined();
+    }
+
+    // 3. Читаем RCB
+    ClientReportControlBlock rcb = IedConnection_getRCBValues(connection_, &error, rcbRef.c_str(), nullptr);
+    if (error != IED_ERROR_OK || !rcb) {
+        printf("EnableReporting: Failed to get RCB %s, error: %d\n", rcbRef.c_str(), error);
+        ClientDataSet_destroy(clientDataSet);
+        LinkedList_destroy(dataSetDirectory);
+        tsfn_.NonBlockingCall([this, rcbRef, error](Napi::Env env, Napi::Function jsCallback) {
+            Napi::Object obj = Napi::Object::New(env);
+            obj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
+            obj.Set("type", Napi::String::New(env, "error"));
+            obj.Set("reason", Napi::String::New(env, "Failed to get RCB " + rcbRef + ", error: " + std::to_string(error)));
+            jsCallback.Call({ Napi::String::New(env, "data"), obj });
+        });
+        return env.Undefined();
+    }
+
+    // 4. Настраиваем RCB
+    ClientReportControlBlock_setResv(rcb, true);
+    ClientReportControlBlock_setTrgOps(rcb, TRG_OPT_DATA_CHANGED | TRG_OPT_QUALITY_CHANGED | TRG_OPT_INTEGRITY | TRG_OPT_GI);
+    ClientReportControlBlock_setDataSetReference(rcb, datasetRef.c_str());
+    ClientReportControlBlock_setRptEna(rcb, true);
+    ClientReportControlBlock_setIntgPd(rcb, 3000);  // каждые 3 сек
+    ClientReportControlBlock_setGI(rcb, true);      // включить GI
+
+    // 5. СОХРАНЯЕМ ReportInfo ДО установки хендлера!
+    ReportInfo reportInfo;
+    reportInfo.rcb = rcb;
+    reportInfo.dataSet = clientDataSet;
+    reportInfo.dataSetDirectory = dataSetDirectory;
+    reportInfo.rcbRef = rcbRef;
+    activeReports_[rcbRef] = reportInfo;
+
+    // 6. УСТАНАВЛИВАЕМ ХЕНДЛЕР ПОСЛЕ СОХРАНЕНИЯ ReportInfo!
+    IedConnection_installReportHandler(
+        connection_,
+        rcbRef.c_str(),
+        ClientReportControlBlock_getRptId(rcb),
+        ReportCallback,
+        this
+    );
+
+    // 7. Пишем параметры RCB (включая RptEna и GI)
+    IedConnection_setRCBValues(connection_, &error, rcb, RCB_ELEMENT_TRG_OPS | RCB_ELEMENT_RPT_ENA | RCB_ELEMENT_GI | RCB_ELEMENT_INTG_PD, true);
+
+    if (error != IED_ERROR_OK) {
+        printf("EnableReporting: Failed to set RCB values, error: %d\n", error);
+        activeReports_.erase(rcbRef);
+        ClientReportControlBlock_destroy(rcb);
+        ClientDataSet_destroy(clientDataSet);
+        LinkedList_destroy(dataSetDirectory);
+        tsfn_.NonBlockingCall([this, rcbRef, error](Napi::Env env, Napi::Function jsCallback) {
+            Napi::Object obj = Napi::Object::New(env);
+            obj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
+            obj.Set("type", Napi::String::New(env, "error"));
+            obj.Set("reason", Napi::String::New(env, "Failed to set RCB values for " + rcbRef + ", error: " + std::to_string(error)));
+            jsCallback.Call({ Napi::String::New(env, "data"), obj });
+        });
+        return env.Undefined();
+    }
+
+    printf("EnableReporting: Successfully enabled reporting for %s → %s\n", rcbRef.c_str(), datasetRef.c_str());
+
+    // 8. Отправляем событие
+    tsfn_.NonBlockingCall([this, rcbRef](Napi::Env env, Napi::Function jsCallback) {
+        try {
+            Napi::Object obj = Napi::Object::New(env);
+            obj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
+            obj.Set("type", Napi::String::New(env, "control"));
+            obj.Set("event", Napi::String::New(env, "reportingEnabled"));
+            obj.Set("rcbRef", Napi::String::New(env, rcbRef));
+            jsCallback.Call({ Napi::String::New(env, "data"), obj });
+        } catch (...) {}
+    });
+
+    return env.Undefined();
 }
 
 Napi::Value MmsClient::DisableReporting(const Napi::CallbackInfo& info) {
