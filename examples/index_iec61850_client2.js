@@ -33,9 +33,11 @@ const client = new MmsClient((event, data) => {
             if (data.timestamp) {
                 console.log(` Timestamp: ${data.timestamp}`);
             }
-            data.values.forEach((value, index) => {
-                if (data.reasonsForInclusion[index] !== 0) {
-                    console.log(` Value[${index}]: ${util.inspect(value, { depth: null })}, Reason: ${data.reasonsForInclusion[index]}`);
+            // data.values - это объект, а не массив
+            Object.entries(data.values).forEach(([ref, value], index) => {
+                const reason = data.reasons[ref];
+                if (reason && reason !== 0) {
+                    console.log(` ${ref}: ${util.inspect(value, { depth: null })}, Reason: ${reason}`);
                 }
             });
         } else if (data.event === 'batchData') {
