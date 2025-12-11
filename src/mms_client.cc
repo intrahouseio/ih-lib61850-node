@@ -47,12 +47,15 @@ static MmsClient::ResultData ConvertMmsValueToResultData(MmsValue* val, const st
         data.type = MMS_DATA_ACCESS_ERROR;
         data.isValid = false;
         data.errorReason = "Null value";
+        printf("ConvertMmsValueToResultData: NULL value for attrName='%s'\n", attrName.c_str());
         return data;
     }
 
     data.type = MmsValue_getType(val);
     data.isValid = true;
     data.errorReason = "";
+
+    printf("ConvertMmsValueToResultData: attrName='%s', type=%d\n", attrName.c_str(), data.type);
 
     switch (data.type) {
         case MMS_FLOAT:
@@ -61,6 +64,7 @@ static MmsClient::ResultData ConvertMmsValueToResultData(MmsValue* val, const st
                 data.isValid = false;
                 data.errorReason = "Invalid float";
             }
+            printf("  floatValue: %f\n", data.floatValue);
             break;
 
         case MMS_INTEGER:
@@ -75,17 +79,22 @@ static MmsClient::ResultData ConvertMmsValueToResultData(MmsValue* val, const st
                     case 4: data.stringValue = "sbo-with-enhanced-security"; break;
                     default: data.stringValue = "unknown(" + std::to_string(data.intValue) + ")";
                 }
+                printf("  ctlModel intValue: %ld, stringValue: '%s'\n", data.intValue, data.stringValue.c_str());
+            } else {
+                printf("  intValue: %ld\n", data.intValue);
             }
             break;
 
         case MMS_BOOLEAN:
             data.boolValue = MmsValue_getBoolean(val);
+            printf("  boolValue: %d\n", data.boolValue);
             break;
 
         case MMS_VISIBLE_STRING:
             {
                 const char* str = MmsValue_toString(val);
                 data.stringValue = str ? str : "";
+                printf("  stringValue: '%s'\n", data.stringValue.c_str());
             }
             break;
 
@@ -96,6 +105,7 @@ static MmsClient::ResultData ConvertMmsValueToResultData(MmsValue* val, const st
                 char buf[64];
                 strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", gmtime(&sec));
                 data.stringValue = std::string(buf) + "." + std::to_string(ms % 1000);
+                printf("  utcTime: '%s'\n", data.stringValue.c_str());
             }
             break;
 
@@ -104,6 +114,7 @@ static MmsClient::ResultData ConvertMmsValueToResultData(MmsValue* val, const st
                 int size = MmsValue_getBitStringSize(val);
                 uint64_t bits = MmsValue_getBitStringAsInteger(val);
                 data.intValue = static_cast<int64_t>(bits);
+                printf("  bitString size: %d, bits: %lu\n", size, bits);
 
                 if (attrName == "q") {
                     std::string q;
@@ -112,6 +123,7 @@ static MmsClient::ResultData ConvertMmsValueToResultData(MmsValue* val, const st
                     if (q.empty()) q = "Good";
                     else if (!q.empty()) q.pop_back();
                     data.stringValue = q;
+                    printf("  quality string: '%s'\n", data.stringValue.c_str());
                 }
                 else if (size == 2 && attrName.find("stVal") != std::string::npos) {
                     switch (bits) {
@@ -121,17 +133,43 @@ static MmsClient::ResultData ConvertMmsValueToResultData(MmsValue* val, const st
                         case 3: data.stringValue = "bad-state"; break;
                         default: data.stringValue = "unknown(" + std::to_string(bits) + ")";
                     }
+                    printf("  stVal string: '%s'\n", data.stringValue.c_str());
                 }
+            }
+            break;
+
+        case MMS_OCTET_STRING:  // Добавляем обработку типа 7
+            {
+                int size = MmsValue_getOctetStringSize(val);
+                printf("  octetString size: %d\n", size);
+                
+                // Преобразуем в строку, если это текст
+                const uint8_t* octets = MmsValue_getOctetStringBuffer(val);
+                std::string octetStr;
+                for (int i = 0; i < size; ++i) {
+                    if (octets[i] >= 32 && octets[i] <= 126) { // Печатные ASCII символы
+                        octetStr += static_cast<char>(octets[i]);
+                    } else {
+                        char hex[4];
+                        snprintf(hex, sizeof(hex), "\\x%02X", octets[i]);
+                        octetStr += hex;
+                    }
+                }
+                data.stringValue = octetStr;
+                printf("  octetString value: '%s'\n", data.stringValue.c_str());
             }
             break;
 
         case MMS_STRUCTURE:
             {
                 int size = MmsValue_getArraySize(val);
+                printf("  structure size: %d\n", size);
                 for (int i = 0; i < size; ++i) {
                     MmsValue* el = MmsValue_getElement(val, i);
                     if (el) {
                         data.structureElements.push_back(ConvertMmsValueToResultData(el, attrName + "." + std::to_string(i)));
+                    } else {
+                        printf("  element %d is NULL\n", i);
                     }
                 }
             }
@@ -140,10 +178,13 @@ static MmsClient::ResultData ConvertMmsValueToResultData(MmsValue* val, const st
         case MMS_ARRAY:
             {
                 int size = MmsValue_getArraySize(val);
+                printf("  array size: %d\n", size);
                 for (int i = 0; i < size; ++i) {
                     MmsValue* el = MmsValue_getElement(val, i);
                     if (el) {
                         data.arrayElements.push_back(ConvertMmsValueToResultData(el, attrName + "[" + std::to_string(i) + "]"));
+                    } else {
+                        printf("  element %d is NULL\n", i);
                     }
                 }
             }
@@ -152,36 +193,104 @@ static MmsClient::ResultData ConvertMmsValueToResultData(MmsValue* val, const st
         default:
             data.isValid = false;
             data.errorReason = "Unsupported MMS type: " + std::to_string(data.type);
+            printf("  unsupported type: %d\n", data.type);
             break;
     }
     return data;
 }
 
 // ResultData → Napi::Value
-static Napi::Value ResultDataToNapi(Napi::Env env, const MmsClient::ResultData& data) {
+/*static Napi::Value ResultDataToNapi(Napi::Env env, const MmsClient::ResultData& data, const std::string& attrName = "") {
     if (!data.isValid) {
         return Napi::String::New(env, data.errorReason);
     }
 
     switch (data.type) {
-        case MMS_FLOAT: return Napi::Number::New(env, data.floatValue);
+        case MMS_FLOAT:
+            return Napi::Number::New(env, data.floatValue);
+
         case MMS_INTEGER:
         case MMS_UNSIGNED:
-            if (!data.stringValue.empty()) return Napi::String::New(env, data.stringValue);
+            if (!data.stringValue.empty()) {
+                return Napi::String::New(env, data.stringValue);
+            }
             return Napi::Number::New(env, static_cast<double>(data.intValue));
-        case MMS_BOOLEAN: return Napi::Boolean::New(env, data.boolValue);
+
+        case MMS_BOOLEAN:
+            return Napi::Boolean::New(env, data.boolValue);
+
         case MMS_VISIBLE_STRING:
-        case MMS_UTC_TIME: return Napi::String::New(env, data.stringValue);
+        case MMS_UTC_TIME:
+            return Napi::String::New(env, data.stringValue);
+
         case MMS_BIT_STRING:
-            if (!data.stringValue.empty()) return Napi::String::New(env, data.stringValue);
+            if (!data.stringValue.empty()) {
+                return Napi::String::New(env, data.stringValue);
+            }
             return Napi::Number::New(env, static_cast<double>(data.intValue));
+
         case MMS_STRUCTURE: {
             Napi::Object obj = Napi::Object::New(env);
+
+            // === СПЕЦИАЛЬНЫЕ СТРУКТУРЫ ПО ИМЕНИ АТРИБУТА ===
+            std::string name = attrName;
+            std::transform(name.begin(), name.end(), name.begin(), ::tolower);
+
+            // Oper, SBOw, Cancel → CDC: SPC, DPC, etc.
+            if (name.find("oper") != std::string::npos ||
+                name.find("sbow") != std::string::npos ||
+                name.find("cancel") != std::string::npos) {
+
+                static const char* operFields[] = { "ctlVal", "origin", "ctlNum", "T", "Test", "Check" };
+                static const char* originFields[] = { "orCat", "orIdent" };
+
+                for (size_t i = 0; i < data.structureElements.size() && i < 6; ++i) {
+                    if (i == 1) { // origin
+                        Napi::Object origin = Napi::Object::New(env);
+                        if (data.structureElements[i].structureElements.size() >= 1)
+                            origin.Set("orCat", ResultDataToNapi(env, data.structureElements[i].structureElements[0]));
+                        if (data.structureElements[i].structureElements.size() >= 2)
+                            origin.Set("orIdent", ResultDataToNapi(env, data.structureElements[i].structureElements[1]));
+                        obj.Set(operFields[i], origin);
+                    } else {
+                        obj.Set(operFields[i], ResultDataToNapi(env, data.structureElements[i]));
+                    }
+                }
+                return obj;
+            }
+
+            // stVal + q + t → общий случай для MX/ST
+            if (name.find("stval") != std::string::npos || name.find("q") != std::string::npos || name.find("t") != std::string::npos) {
+                if (data.structureElements.size() >= 3) {
+                    obj.Set("stVal", ResultDataToNapi(env, data.structureElements[0]));
+                    obj.Set("q", ResultDataToNapi(env, data.structureElements[1]));
+                    obj.Set("t", ResultDataToNapi(env, data.structureElements[2]));
+                    return obj;
+                }
+            }
+
+            // NamPlt
+            if (name.find("namplt") != std::string::npos) {
+                static const char* namPltFields[] = { "vendor", "swRev", "d", "configRev" };
+                for (size_t i = 0; i < data.structureElements.size() && i < 4; ++i) {
+                    obj.Set(namPltFields[i], ResultDataToNapi(env, data.structureElements[i]));
+                }
+                return obj;
+            }
+
+            // PhyNam (LPHD1)
+            if (name.find("phynam") != std::string::npos) {
+                obj.Set("vendor", data.structureElements.size() > 0 ? ResultDataToNapi(env, data.structureElements[0]) : env.Null());
+                return obj;
+            }
+
+            // === ПО УМОЛЧАНИЮ — нумерованные поля ===
             for (size_t i = 0; i < data.structureElements.size(); ++i) {
                 obj.Set(std::to_string(i), ResultDataToNapi(env, data.structureElements[i]));
             }
             return obj;
         }
+
         case MMS_ARRAY: {
             Napi::Array arr = Napi::Array::New(env, data.arrayElements.size());
             for (size_t i = 0; i < data.arrayElements.size(); ++i) {
@@ -189,10 +298,228 @@ static Napi::Value ResultDataToNapi(Napi::Env env, const MmsClient::ResultData& 
             }
             return arr;
         }
+
         default:
-            return Napi::String::New(env, "Unsupported type");
+            return Napi::String::New(env, "type_" + std::to_string(data.type));
     }
-}
+}*/
+
+// ResultData → Napi::Value
+static Napi::Value ResultDataToNapi(Napi::Env env, const MmsClient::ResultData& data, const std::string& attrName = "") {
+    if (!data.isValid) {
+        return Napi::String::New(env, data.errorReason);
+    }
+
+    switch (data.type) {
+        case MMS_FLOAT:
+            return Napi::Number::New(env, data.floatValue);
+
+        case MMS_INTEGER:
+        case MMS_UNSIGNED:
+            if (!data.stringValue.empty()) {
+                return Napi::String::New(env, data.stringValue);
+            }
+            return Napi::Number::New(env, static_cast<double>(data.intValue));
+
+        case MMS_BOOLEAN:
+            return Napi::Boolean::New(env, data.boolValue);
+
+        case MMS_VISIBLE_STRING:
+        case MMS_UTC_TIME:
+            return Napi::String::New(env, data.stringValue);
+
+        case MMS_BIT_STRING:
+            if (!data.stringValue.empty()) {
+                return Napi::String::New(env, data.stringValue);
+            }
+            return Napi::Number::New(env, static_cast<double>(data.intValue));
+
+        case MMS_OCTET_STRING:
+            return Napi::String::New(env, data.stringValue);
+
+        case MMS_STRUCTURE: {
+            Napi::Object obj = Napi::Object::New(env);
+            std::string name = attrName;
+            std::transform(name.begin(), name.end(), name.begin(), ::tolower);
+
+            // === СПЕЦИАЛЬНЫЕ СТРУКТУРЫ ДЛЯ CONTROL OBJECTS (CO) ===
+            bool isCO = (name.size() >= 4 && name.substr(name.size() - 4) == "[co]");
+            bool isOper = name.find("oper") != std::string::npos;
+            bool isSBOw = name.find("sbow") != std::string::npos;
+            bool isCancel = name.find("cancel") != std::string::npos;
+            
+            if (isCO || isOper || isSBOw || isCancel) {
+                // Проверяем, что это действительно структура Control Object
+                if (data.structureElements.size() >= 6) {
+                    Napi::Object control = Napi::Object::New(env);
+                    
+                    // 1. ctlVal
+                    control.Set("ctlVal", ResultDataToNapi(env, data.structureElements[0]));
+                    
+                    // 2. origin (структура из 2 элементов)
+                    Napi::Object origin = Napi::Object::New(env);
+                    if (data.structureElements[1].structureElements.size() >= 2) {
+                        // orCat (целое число → строка)
+                        int cat = data.structureElements[1].structureElements[0].intValue;
+                        const char* cats[] = {
+                            "not-supported", "bay-control", "station-control", "remote-control",
+                            "automatic-bay", "automatic-station", "automatic-remote",
+                            "maintenance", "process"
+                        };
+                        std::string catStr = (cat >= 0 && cat < 9) ? cats[cat] : "unknown";
+                        origin.Set("orCat", Napi::String::New(env, catStr));
+                        
+                        // orIdent
+                        origin.Set("orIdent", 
+                            ResultDataToNapi(env, data.structureElements[1].structureElements[1]));
+                    } else {
+                        origin.Set("orCat", Napi::String::New(env, "not-supported"));
+                        origin.Set("orIdent", Napi::String::New(env, ""));
+                    }
+                    control.Set("origin", origin);
+                    
+                    // 3. ctlNum
+                    control.Set("ctlNum", ResultDataToNapi(env, data.structureElements[2]));
+                    
+                    // 4. T (время)
+                    control.Set("T", ResultDataToNapi(env, data.structureElements[3]));
+                    
+                    // 5. Test
+                    control.Set("Test", ResultDataToNapi(env, data.structureElements[4]));
+                    
+                    // 6. Check
+                    control.Set("Check", ResultDataToNapi(env, data.structureElements[5]));
+                    
+                    // Определяем имя поля
+                    if (isSBOw) {
+                        obj.Set("SBOw", control);
+                    } else if (isCancel) {
+                        obj.Set("Cancel", control);
+                    } else {
+                        // По умолчанию Oper
+                        obj.Set("Oper", control);
+                    }
+                    return obj;
+                } else if (data.structureElements.size() == 1 && 
+                        data.structureElements[0].type == MMS_STRUCTURE &&
+                        data.structureElements[0].structureElements.size() >= 6) {
+                    // Вложенная структура (массив из одного Control Object)
+                    return ResultDataToNapi(env, data.structureElements[0], attrName);
+                }
+            }
+
+            // === CF: Configuration objects (Mod[CF], Pos[CF], etc.) ===
+            bool isCF = (name.size() >= 4 && name.substr(name.size() - 4) == "[cf]");
+            if (isCF && data.structureElements.size() == 1) {
+                const MmsClient::ResultData& cfData = data.structureElements[0];
+                
+                // Извлекаем имя поля из attrName (например, "Mod" из "Mod[CF]")
+                std::string fieldName;
+                size_t bracketPos = attrName.find("[CF]");
+                if (bracketPos != std::string::npos) {
+                    std::string daName = attrName.substr(0, bracketPos);
+                    // Удаляем путь, если есть
+                    size_t dotPos = daName.find_last_of('.');
+                    if (dotPos != std::string::npos) {
+                        fieldName = daName.substr(dotPos + 1);
+                    } else {
+                        fieldName = daName;
+                    }
+                }
+                
+                if (fieldName.empty()) {
+                    fieldName = "value";
+                }
+                
+                // Для ctlModel преобразуем число в строку
+                if ((fieldName == "Mod" || fieldName == "Pos" || fieldName == "BlkOpn" || fieldName == "BlkCls") &&
+                    (cfData.type == MMS_INTEGER || cfData.type == MMS_UNSIGNED)) {
+                    int value = cfData.intValue;
+                    const char* ctlModelStr = "";
+                    switch (value) {
+                        case 0: ctlModelStr = "status-only"; break;
+                        case 1: ctlModelStr = "direct-with-normal-security"; break;
+                        case 2: ctlModelStr = "sbo-with-normal-security"; break;
+                        case 3: ctlModelStr = "direct-with-enhanced-security"; break;
+                        case 4: ctlModelStr = "sbo-with-enhanced-security"; break;
+                        default: ctlModelStr = "unknown";
+                    }
+                    Napi::Object cfObj = Napi::Object::New(env);
+                    cfObj.Set("ctlModel", Napi::String::New(env, ctlModelStr));
+                    return cfObj;
+                } else {
+                    // Для других CF полей просто возвращаем значение
+                    Napi::Object cfObj = Napi::Object::New(env);
+                    cfObj.Set(fieldName, ResultDataToNapi(env, cfData));
+                    return cfObj;
+                }
+            }
+
+            // === EX: NamPlt[EX] (ldNs) ===
+            bool isEX = (name.size() >= 4 && name.substr(name.size() - 4) == "[ex]");
+            if (isEX && data.structureElements.size() == 1) {
+                Napi::Object exObj = Napi::Object::New(env);
+                exObj.Set("ldNs", ResultDataToNapi(env, data.structureElements[0]));
+                return exObj;
+            }
+
+            // === DC: NamPlt[DC] и PhyNam[DC] ===
+            bool isDC = (name.size() >= 4 && name.substr(name.size() - 4) == "[dc]");
+            
+            // === NamPlt ===
+            if (name.find("namplt") != std::string::npos) {
+                if (data.structureElements.size() == 4) {
+                    // DC: vendor, swRev, d, configRev
+                    Napi::Object nampltObj = Napi::Object::New(env);
+                    nampltObj.Set("vendor", ResultDataToNapi(env, data.structureElements[0]));
+                    nampltObj.Set("swRev", ResultDataToNapi(env, data.structureElements[1]));
+                    nampltObj.Set("d", ResultDataToNapi(env, data.structureElements[2]));
+                    nampltObj.Set("configRev", ResultDataToNapi(env, data.structureElements[3]));
+                    return nampltObj;
+                } else if (data.structureElements.size() == 3) {
+                    // Другие NamPlt: vendor, swRev, d
+                    Napi::Object nampltObj = Napi::Object::New(env);
+                    nampltObj.Set("vendor", ResultDataToNapi(env, data.structureElements[0]));
+                    nampltObj.Set("swRev", ResultDataToNapi(env, data.structureElements[1]));
+                    nampltObj.Set("d", ResultDataToNapi(env, data.structureElements[2]));
+                    return nampltObj;
+                }
+            }
+
+            // === PhyNam (LPHD1) ===
+            if (name.find("phynam") != std::string::npos && !data.structureElements.empty()) {
+                obj.Set("vendor", ResultDataToNapi(env, data.structureElements[0]));
+                return obj;
+            }
+
+            // === ST: stVal + q + t ===
+            bool isST = (name.size() >= 4 && name.substr(name.size() - 4) == "[st]");
+            if (isST && data.structureElements.size() >= 3) {
+                obj.Set("stVal", ResultDataToNapi(env, data.structureElements[0]));
+                obj.Set("q", ResultDataToNapi(env, data.structureElements[1]));
+                obj.Set("t", ResultDataToNapi(env, data.structureElements[2]));
+                return obj;
+            }
+
+            // === ПО УМОЛЧАНИЮ — нумерованные поля ===
+            for (size_t i = 0; i < data.structureElements.size(); ++i) {
+                obj.Set(std::to_string(i), ResultDataToNapi(env, data.structureElements[i]));
+            }
+            return obj;
+        }
+
+                case MMS_ARRAY: {
+                    Napi::Array arr = Napi::Array::New(env, data.arrayElements.size());
+                    for (size_t i = 0; i < data.arrayElements.size(); ++i) {
+                        arr.Set(i, ResultDataToNapi(env, data.arrayElements[i]));
+                    }
+                    return arr;
+                }
+
+                default:
+                    return Napi::String::New(env, "type_" + std::to_string(data.type));
+            }
+        }
 
 // ResultData → std::string (для GetLogicalDevices)
 static std::string ResultDataToString(const MmsClient::ResultData& data) {
@@ -204,6 +531,7 @@ static std::string ResultDataToString(const MmsClient::ResultData& data) {
         case MMS_BOOLEAN: return data.boolValue ? "true" : "false";
         case MMS_VISIBLE_STRING:
         case MMS_UTC_TIME: return data.stringValue;
+        case MMS_OCTET_STRING: return data.stringValue;
         case MMS_BIT_STRING: return data.stringValue.empty() ? std::to_string(data.intValue) : data.stringValue;
         case MMS_STRUCTURE:
         case MMS_ARRAY: return "complex";
@@ -546,7 +874,7 @@ Napi::Value MmsValueToNapi(Napi::Env env, MmsValue* value) {
     return ResultDataToNapi(env, data);
 }
 
-Napi::Value MmsClient::ReadDataSetValues(const Napi::CallbackInfo& info) {
+/*Napi::Value MmsClient::ReadDataSetValues(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
 
     if (!connected_) {
@@ -636,7 +964,13 @@ Napi::Value MmsClient::ReadDataSetValues(const Napi::CallbackInfo& info) {
                 std::string refStr(memberRef);
 
                 MmsValue* val = MmsValue_getElement(values, index);
-                valuesObj.Set(refStr, val ? MmsValueToNapi(env, val) : env.Null());
+                if (val) {
+                    std::string attrName = refStr.substr(refStr.rfind('.') + 1);
+                    ResultData resData = ConvertMmsValueToResultData(val, attrName);
+                    valuesObj.Set(refStr, ResultDataToNapi(env, resData, attrName));
+                } else {
+                    valuesObj.Set(refStr, env.Null());
+                }
                 index++;
             }
             member = LinkedList_getNext(member);
@@ -670,6 +1004,170 @@ Napi::Value MmsClient::ReadDataSetValues(const Napi::CallbackInfo& info) {
     });
 
     return jsResults;
+}*/
+
+Napi::Value MmsClient::ReadDataSetValues(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+
+    if (!connected_) {
+        Napi::Error::New(env, "Client not connected").ThrowAsJavaScriptException();
+        return env.Null();
+    }
+
+    std::vector<std::string> datasetRefs;
+    if (info.Length() != 1 || (!info[0].IsString() && !info[0].IsArray())) {
+        Napi::TypeError::New(env, "Expected string or array of strings").ThrowAsJavaScriptException();
+        return env.Null();
+    }
+
+    if (info[0].IsString()) {
+        datasetRefs.push_back(info[0].As<Napi::String>().Utf8Value());
+    } else {
+        Napi::Array arr = info[0].As<Napi::Array>();
+        for (uint32_t i = 0; i < arr.Length(); ++i) {
+            if (arr.Get(i).IsString()) {
+                datasetRefs.push_back(arr.Get(i).As<Napi::String>().Utf8Value());
+            }
+        }
+    }
+
+    printf("ReadDataSetValues: Processing %zu dataset(s)\n", datasetRefs.size());
+    
+    std::lock_guard<std::mutex> lock(connMutex_);
+    Napi::Array results = Napi::Array::New(env, datasetRefs.size());
+
+    for (size_t dsIdx = 0; dsIdx < datasetRefs.size(); ++dsIdx) {
+        const std::string& datasetRef = datasetRefs[dsIdx];
+        Napi::Object result = Napi::Object::New(env);
+        result.Set("datasetRef", Napi::String::New(env, datasetRef));
+
+        printf("\nReadDataSetValues: Processing dataset '%s'\n", datasetRef.c_str());
+
+        IedClientError error;
+        bool isDeletable = false;
+
+        LinkedList members = IedConnection_getDataSetDirectory(connection_, &error, datasetRef.c_str(), &isDeletable);
+        if (error != IED_ERROR_OK || !members) {
+            printf("ReadDataSetValues: Failed to get dataset directory for '%s', error: %d\n", 
+                   datasetRef.c_str(), error);
+            result.Set("isValid", false);
+            result.Set("errorReason", Napi::String::New(env, "Cannot get dataset directory"));
+            results.Set(dsIdx, result);
+            continue;
+        }
+
+        // Подсчитаем количество членов
+        int memberCount = 0;
+        LinkedList temp = members;
+        while (temp) {
+            if (temp->data) memberCount++;
+            temp = LinkedList_getNext(temp);
+        }
+        printf("ReadDataSetValues: Dataset '%s' has %d members, isDeletable=%d\n", 
+               datasetRef.c_str(), memberCount, isDeletable);
+
+        ClientDataSet clientDataSet = IedConnection_readDataSetValues(connection_, &error, datasetRef.c_str(), nullptr);
+        if (error != IED_ERROR_OK || !clientDataSet) {
+            printf("ReadDataSetValues: Failed to read dataset values for '%s', error: %d\n", 
+                   datasetRef.c_str(), error);
+            result.Set("isValid", false);
+            result.Set("errorReason", Napi::String::New(env, "Cannot read dataset values"));
+            LinkedList_destroy(members);
+            results.Set(dsIdx, result);
+            continue;
+        }
+
+        MmsValue* valuesArray = ClientDataSet_getValues(clientDataSet);
+        if (!valuesArray || MmsValue_getType(valuesArray) != MMS_ARRAY) {
+            printf("ReadDataSetValues: Invalid dataset values for '%s', type=%d\n", 
+                   datasetRef.c_str(), valuesArray ? MmsValue_getType(valuesArray) : -1);
+            result.Set("isValid", false);
+            result.Set("errorReason", Napi::String::New(env, "Invalid dataset values"));
+            ClientDataSet_destroy(clientDataSet);
+            LinkedList_destroy(members);
+            results.Set(dsIdx, result);
+            continue;
+        }
+
+        int arraySize = MmsValue_getArraySize(valuesArray);
+        printf("ReadDataSetValues: Values array size for '%s' is %d\n", datasetRef.c_str(), arraySize);
+
+        Napi::Object valuesObj = Napi::Object::New(env);
+        LinkedList entry = members;
+        int index = 0;
+
+        // КЛЮЧЕВАЯ ПРАВКА: цикл должен быть while(entry), а не while(entry && entry->data)
+        while (entry) {
+            if (entry->data) {
+                char* memberRef = (char*)entry->data;
+                std::string fullRef(memberRef);
+
+                size_t dot = fullRef.rfind('.');
+                std::string attrName = (dot != std::string::npos) ? fullRef.substr(dot + 1) : fullRef;
+                
+                printf("\nReadDataSetValues: Processing member [%d]\n", index);
+                printf("  fullRef: '%s'\n", fullRef.c_str());
+                printf("  attrName: '%s'\n", attrName.c_str());
+
+                MmsValue* val = MmsValue_getElement(valuesArray, index);
+                if (val) {
+                    int valType = MmsValue_getType(val);
+                    printf("  MmsValue type: %d\n", valType);
+                    
+                    ResultData rd = ConvertMmsValueToResultData(val, attrName);
+                    printf("  ResultData.isValid: %d, ResultData.type: %d\n", rd.isValid, rd.type);
+                    
+                    Napi::Value jsValue = ResultDataToNapi(env, rd, attrName);
+                    valuesObj.Set(fullRef, jsValue);
+                    
+                    // Выведем также тип JS значения для отладки
+                    if (jsValue.IsObject()) {
+                        printf("  JS value is Object\n");
+                    } else if (jsValue.IsString()) {
+                        printf("  JS value is String\n");
+                    } else if (jsValue.IsBoolean()) {
+                        printf("  JS value is Boolean\n");
+                    } else if (jsValue.IsNumber()) {
+                        printf("  JS value is Number\n");
+                    }
+                } else {
+                    printf("  MmsValue is NULL at index %d\n", index);
+                    valuesObj.Set(fullRef, env.Null());
+                }
+                index++;
+            } else {
+                printf("\nReadDataSetValues: Entry %d has NULL data\n", index);
+            }
+            entry = LinkedList_getNext(entry);  // ← всегда двигаемся дальше
+        }
+
+        printf("\nReadDataSetValues: Finished processing dataset '%s', processed %d members\n", 
+               datasetRef.c_str(), index);
+
+        result.Set("isValid", true);
+        result.Set("values", valuesObj);
+        result.Set("count", Napi::Number::New(env, index));
+        result.Set("isDeletable", Napi::Boolean::New(env, isDeletable));
+        results.Set(dsIdx, result);
+
+        ClientDataSet_destroy(clientDataSet);
+        LinkedList_destroy(members);
+    }
+
+    // Уведомление
+    tsfn_.NonBlockingCall([this, count = datasetRefs.size()](Napi::Env env, Napi::Function cb) {
+        try {
+            Napi::Object o = Napi::Object::New(env);
+            o.Set("clientID", Napi::String::New(env, clientID_));
+            o.Set("type", "data");
+            o.Set("event", count == 1 ? "dataSetRead" : "multipleDataSetsRead");
+            o.Set("count", static_cast<int>(count));
+            cb.Call({ Napi::String::New(env, "data"), o });
+        } catch (...) {}
+    });
+
+    printf("\nReadDataSetValues: Returning results for %zu dataset(s)\n", datasetRefs.size());
+    return results;
 }
 
 Napi::Value MmsClient::BrowseDataModel(const Napi::CallbackInfo& info) {
@@ -1012,108 +1510,6 @@ Napi::Value MmsClient::GetDataSetDirectory(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
 
     if (info.Length() < 1) {
-        Napi::TypeError::New(env, "Expected dataRef (string) or array of strings").ThrowAsJavaScriptException();
-        return env.Undefined();
-    }
-
-    std::vector<std::string> dataRefs;
-
-    if (info[0].IsString()) {
-        dataRefs.push_back(info[0].As<Napi::String>().Utf8Value());
-    } else if (info[0].IsArray()) {
-        Napi::Array arr = info[0].As<Napi::Array>();
-        for (uint32_t i = 0; i < arr.Length(); ++i) {
-            if (!arr.Get(i).IsString()) {
-                Napi::TypeError::New(env, "All elements must be strings").ThrowAsJavaScriptException();
-                return env.Undefined();
-            }
-            dataRefs.push_back(arr.Get(i).As<Napi::String>().Utf8Value());
-        }
-    } else {
-        Napi::TypeError::New(env, "Expected string or array of strings").ThrowAsJavaScriptException();
-        return env.Undefined();
-    }
-
-    std::lock_guard<std::mutex> lock(connMutex_);
-    if (!connected_) {
-        Napi::Error::New(env, "Client not connected").ThrowAsJavaScriptException();
-        return env.Null();
-    }
-
-    Napi::Array results = Napi::Array::New(env, dataRefs.size());
-
-    for (size_t i = 0; i < dataRefs.size(); ++i) {
-        {
-        const std::string& ref = dataRefs[i];
-        Napi::Object result = Napi::Object::New(env);
-        result.Set("dataRef", Napi::String::New(env, ref));
-
-        IedClientError error;
-        FunctionalConstraint fc = IEC61850_FC_ST;
-
-        // Автоопределение FC (как было)
-        if (ref.find(".ctlModel") != std::string::npos) fc = IEC61850_FC_CF;
-        else if (ref.find(".Oper") != std::string::npos) fc = IEC61850_FC_CO;
-        else if (ref.find(".SPCSO") != std::string::npos) fc = IEC61850_FC_ST;
-        else if (ref.find(".AnIn") != std::string::npos) fc = IEC61850_FC_MX;
-        else if (ref.find(".NamPlt") != std::string::npos || ref.find(".PhyNam") != std::string::npos) fc = IEC61850_FC_DC;
-
-        MmsValue* value = nullptr;
-        std::vector<FunctionalConstraint> fcs = {
-            fc, IEC61850_FC_ALL, IEC61850_FC_ST, IEC61850_FC_MX,
-            IEC61850_FC_DC, IEC61850_FC_SP, IEC61850_FC_CO, IEC61850_FC_CF
-        };
-
-        for (auto tryFc : fcs) {
-            value = IedConnection_readObject(connection_, &error, ref.c_str(), tryFc);
-            if (error == IED_ERROR_OK && value) break;
-            if (value) MmsValue_delete(value);
-        }
-
-        if (error != IED_ERROR_OK || !value) {
-            result.Set("isValid", false);
-            result.Set("errorReason", Napi::String::New(env, "Read failed: error " + std::to_string(error)));
-        } else {
-            MmsClient::ResultData resData = ConvertMmsValueToResultData(value, ref.substr(ref.rfind(".") + 1));
-            result.Set("isValid", true);
-            result.Set("value", ResultDataToNapi(env, resData));
-            MmsValue_delete(value);
-        }
-
-        results.Set(i, result);
-    }
-
-    // Отправляем событие через tsfn (опционально)
-    tsfn_.NonBlockingCall([this, dataRefs, results](Napi::Env env, Napi::Function jsCallback) {
-        try {
-            Napi::Object eventObj = Napi::Object::New(env);
-            eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
-            eventObj.Set("type", Napi::String::New(env, "data"));
-            eventObj.Set("event", dataRefs.size() == 1 ? "data" : "batchData");
-
-            Napi::Array refsArr = Napi::Array::New(env, dataRefs.size());
-            Napi::Array valsArr = Napi::Array::New(env, dataRefs.size());
-            for (size_t i = 0; i < dataRefs.size(); ++i) {
-                Napi::Object res = results.Get(i).As<Napi::Object>();
-                refsArr.Set(i, Napi::String::New(env, dataRefs[i]));
-                valsArr.Set(i, res);
-            }
-            eventObj.Set(dataRefs.size() == 1 ? "dataRef" : "dataRefs", refsArr);
-            eventObj.Set("values", valsArr);
-
-            jsCallback.Call({ Napi::String::New(env, "data"), eventObj });
-        } catch (...) {}
-    });
-
-    // Возвращаем результат синхронно
-    return results;
-    }
-}*/
-
-Napi::Value MmsClient::ReadData(const Napi::CallbackInfo& info) {
-    Napi::Env env = info.Env();
-
-    if (info.Length() < 1) {
         Napi::TypeError::New(env, "Expected dataRef or array of dataRefs").ThrowAsJavaScriptException();
         return env.Undefined();
     }
@@ -1178,8 +1574,82 @@ Napi::Value MmsClient::ReadData(const Napi::CallbackInfo& info) {
     }
 
     return results;  // ← синхронный возврат
-}
+}*/
 
+Napi::Value MmsClient::ReadData(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+
+    if (info.Length() < 1) {
+        Napi::TypeError::New(env, "Expected dataRef or array of dataRefs").ThrowAsJavaScriptException();
+        return env.Undefined();
+    }
+
+    std::vector<std::string> dataRefs;
+    if (info[0].IsString()) {
+        dataRefs.push_back(info[0].As<Napi::String>().Utf8Value());
+    } else if (info[0].IsArray()) {
+        Napi::Array arr = info[0].As<Napi::Array>();
+        for (uint32_t i = 0; i < arr.Length(); ++i) {
+            if (arr.Get(i).IsString()) {
+                dataRefs.push_back(arr.Get(i).As<Napi::String>().Utf8Value());
+            }
+        }
+    } else {
+        Napi::TypeError::New(env, "Expected string or array").ThrowAsJavaScriptException();
+        return env.Undefined();
+    }
+
+    std::lock_guard<std::mutex> lock(connMutex_);
+    if (!connected_) {
+        Napi::Error::New(env, "Not connected").ThrowAsJavaScriptException();
+        return env.Null();
+    }
+
+    Napi::Array results = Napi::Array::New(env, dataRefs.size());
+
+    for (size_t i = 0; i < dataRefs.size(); ++i) {
+        const std::string& ref = dataRefs[i];
+
+        // Извлекаем имя атрибута после последней точки
+        size_t pos = ref.rfind('.');
+        std::string attrName = (pos != std::string::npos) ? ref.substr(pos + 1) : ref;
+
+        Napi::Object item = Napi::Object::New(env);
+        item.Set("dataRef", Napi::String::New(env, ref));
+
+        IedClientError error;
+        MmsValue* value = nullptr;
+
+        std::vector<FunctionalConstraint> fcs = {
+            IEC61850_FC_ST, IEC61850_FC_MX, IEC61850_FC_CO,
+            IEC61850_FC_CF, IEC61850_FC_DC, IEC61850_FC_SP,
+            IEC61850_FC_SG, IEC61850_FC_ALL
+        };
+
+        for (auto fc : fcs) {
+            value = IedConnection_readObject(connection_, &error, ref.c_str(), fc);
+            if (error == IED_ERROR_OK && value) break;
+            if (value) {
+                MmsValue_delete(value);
+                value = nullptr;
+            }
+        }
+
+        if (!value || error != IED_ERROR_OK) {          
+            item.Set("isValid", false);
+            item.Set("errorReason", Napi::String::New(env, "Read failed: error " + std::to_string(error)));
+            item.Set("value", env.Null());
+        } else {
+            ResultData resData = ConvertMmsValueToResultData(value, attrName);
+            item.Set("isValid", true);
+            item.Set("value", ResultDataToNapi(env, resData, attrName));  
+            MmsValue_delete(value);
+        }
+
+        results.Set(static_cast<uint32_t>(i), item);
+    }
+    return results;
+}
 
 
 Napi::Value MmsClient::ControlObject(const Napi::CallbackInfo& info) {
@@ -1854,40 +2324,62 @@ Napi::Value MmsClient::GetStatus(const Napi::CallbackInfo& info) {
     return status;
 }
 
-void MmsClient::ReportCallback(void* parameter, ClientReport report) {
+/*void MmsClient::ReportCallback(void* parameter, ClientReport report) {
     MmsClient* client = static_cast<MmsClient*>(parameter);
     std::string rcbRef = ClientReport_getRcbReference(report) ? ClientReport_getRcbReference(report) : "unknown";
     std::string rptId = ClientReport_getRptId(report) ? ClientReport_getRptId(report) : "unknown";
+
     printf("Received report for %s with rptId %s, clientID: %s\n", rcbRef.c_str(), rptId.c_str(), client->clientID_.c_str());
+
     auto it = client->activeReports_.find(rcbRef);
     if (it == client->activeReports_.end()) {
         printf("No active report info found for %s, clientID: %s\n", rcbRef.c_str(), client->clientID_.c_str());
         return;
     }
+
     LinkedList dataSetDirectory = it->second.dataSetDirectory;
     MmsValue* dataSetValues = ClientReport_getDataSetValues(report);
+
+    // Сюда будем складывать имена атрибутов для правильной конвертации
+    std::vector<std::string> attrNames;
     std::vector<ResultData> reportValues;
     std::vector<int> reasonsForInclusion;
+
     if (dataSetDirectory && dataSetValues) {
-        int dataSetSize = LinkedList_size(dataSetDirectory);
-        for (int i = 0; i < dataSetSize; i++) {
-            ReasonForInclusion reason = ClientReport_getReasonForInclusion(report, i);
-            reasonsForInclusion.push_back(reason);
-            if (reason != IEC61850_REASON_NOT_INCLUDED) {
-                MmsValue* value = MmsValue_getElement(dataSetValues, i);
-                if (value) {
-                    // Используем общую функцию конвертации
-                    ResultData resultData = ConvertMmsValueToResultData(value, "reportValue[" + std::to_string(i) + "]");
-                    reportValues.push_back(resultData);
-                }
+        LinkedList entry = dataSetDirectory;
+        int index = 0;
+
+        while (entry) {
+            std::string attrName = "";
+            if (entry->data) {
+                char* memberRef = (char*)entry->data;
+                std::string fullRef(memberRef);
+                size_t pos = fullRef.rfind('.');
+                attrName = (pos != std::string::npos) ? fullRef.substr(pos + 1) : fullRef;
             }
+
+            ReasonForInclusion reason = ClientReport_getReasonForInclusion(report, index);
+            reasonsForInclusion.push_back(reason);
+
+            MmsValue* value = MmsValue_getElement(dataSetValues, index);
+            if (value && reason != IEC61850_REASON_NOT_INCLUDED) {
+                ResultData resultData = ConvertMmsValueToResultData(value, attrName);
+                reportValues.push_back(resultData);
+                attrNames.push_back(attrName);  // ← сохраняем имя для использования в колбэке
+            } else {
+                reportValues.push_back(ResultData{});  // пустышка
+                attrNames.push_back("");
+            }
+
+            entry = LinkedList_getNext(entry);
+            index++;
         }
     }
-    uint64_t timestamp = 0;
-    if (ClientReport_hasTimestamp(report)) {
-        timestamp = ClientReport_getTimestamp(report);
-    }
-    client->tsfn_.NonBlockingCall([client, rcbRef, rptId, reportValues, reasonsForInclusion, timestamp](Napi::Env env, Napi::Function jsCallback) {
+
+    uint64_t timestamp = ClientReport_hasTimestamp(report) ? ClientReport_getTimestamp(report) : 0;
+
+    // Теперь всё доступно внутри лямбды
+    client->tsfn_.NonBlockingCall([client, rcbRef, rptId, reportValues, attrNames, reasonsForInclusion, timestamp](Napi::Env env, Napi::Function jsCallback) {
         try {
             Napi::Object eventObj = Napi::Object::New(env);
             eventObj.Set("clientID", Napi::String::New(env, client->clientID_.c_str()));
@@ -1895,27 +2387,119 @@ void MmsClient::ReportCallback(void* parameter, ClientReport report) {
             eventObj.Set("event", Napi::String::New(env, "report"));
             eventObj.Set("rcbRef", Napi::String::New(env, rcbRef));
             eventObj.Set("rptId", Napi::String::New(env, rptId));
+
             if (timestamp > 0) {
-                time_t time = timestamp / 1000;
-                char timeStr[64];
-                strftime(timeStr, sizeof(timeStr), "%Y-%m-%d %H:%M:%S", gmtime(&time));
-                std::string timeString = std::string(timeStr) + "." + std::to_string(timestamp % 1000);
-                eventObj.Set("timestamp", Napi::String::New(env, timeString));
+                time_t sec = timestamp / 1000;
+                char buf[64];
+                strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", gmtime(&sec));
+                std::string timeStr = std::string(buf) + "." + std::to_string(timestamp % 1000);
+                eventObj.Set("timestamp", Napi::String::New(env, timeStr));
             }
+
             Napi::Array valuesArray = Napi::Array::New(env, reportValues.size());
-            for (size_t i = 0; i < reportValues.size(); i++) {
-                valuesArray.Set(uint32_t(i), ResultDataToNapi(env, reportValues[i]));
+            for (size_t i = 0; i < reportValues.size(); ++i) {
+                if (!attrNames[i].empty() && reportValues[i].isValid) {
+                    valuesArray.Set(i, ResultDataToNapi(env, reportValues[i], attrNames[i]));
+                } else {
+                    valuesArray.Set(i, env.Null());
+                }
             }
             eventObj.Set("values", valuesArray);
+
             Napi::Array reasonsArray = Napi::Array::New(env, reasonsForInclusion.size());
-            for (size_t i = 0; i < reasonsForInclusion.size(); i++) {
-                reasonsArray.Set(uint32_t(i), Napi::Number::New(env, reasonsForInclusion[i]));
+            for (size_t i = 0; i < reasonsForInclusion.size(); ++i) {
+                reasonsArray.Set(i, Napi::Number::New(env, reasonsForInclusion[i]));
             }
             eventObj.Set("reasonsForInclusion", reasonsArray);
-            jsCallback.Call({Napi::String::New(env, "data"), eventObj});
+
+            jsCallback.Call({ Napi::String::New(env, "data"), eventObj });
         } catch (const Napi::Error& e) {
-            printf("N-API Callback Error in ReportCallback: %s, clientID: %s\n", e.Message().c_str(), client->clientID_.c_str());
+            // Игнорируем ошибки в JS-колбэке
         }
+    });
+}*/
+
+void MmsClient::ReportCallback(void* parameter, ClientReport report) {
+    MmsClient* client = static_cast<MmsClient*>(parameter);
+
+    const char* rcbRefRaw = ClientReport_getRcbReference(report);
+    const char* rptIdRaw = ClientReport_getRptId(report);
+    std::string rcbRef = rcbRefRaw ? rcbRefRaw : "unknown";
+    std::string rptId = rptIdRaw ? rptIdRaw : "unknown";
+
+    auto it = client->activeReports_.find(rcbRef);
+    if (it == client->activeReports_.end()) return;
+
+    LinkedList dataSetDirectory = it->second.dataSetDirectory;
+    MmsValue* dataSetValues = ClientReport_getDataSetValues(report);
+
+    std::vector<std::string> attrNames;
+    std::vector<ResultData> reportValues;
+    std::vector<int> reasons;
+
+    if (dataSetDirectory && dataSetValues) {
+        LinkedList entry = dataSetDirectory;
+        int idx = 0;
+
+        while (entry) {
+            std::string attrName = "";
+            if (entry->data) {
+                std::string fullRef((char*)entry->data);
+                size_t p = fullRef.rfind('.');
+                attrName = (p != std::string::npos) ? fullRef.substr(p + 1) : fullRef;
+            }
+            attrNames.push_back(attrName);
+
+            ReasonForInclusion r = ClientReport_getReasonForInclusion(report, idx);
+            reasons.push_back(static_cast<int>(r));
+
+            MmsValue* val = MmsValue_getElement(dataSetValues, idx);
+            if (val && r != IEC61850_REASON_NOT_INCLUDED) {
+                ResultData rd = ConvertMmsValueToResultData(val, attrName);
+                reportValues.push_back(rd);
+            } else {
+                reportValues.push_back(ResultData{});
+            }
+
+            entry = LinkedList_getNext(entry);
+            idx++;
+        }
+    }
+
+    uint64_t ts = ClientReport_hasTimestamp(report) ? ClientReport_getTimestamp(report) : 0;
+
+    client->tsfn_.NonBlockingCall([client, rcbRef, rptId, reportValues, attrNames, reasons, ts](Napi::Env env, Napi::Function cb) {
+        try {
+            Napi::Object obj = Napi::Object::New(env);
+            obj.Set("clientID", client->clientID_);
+            obj.Set("type", "data");
+            obj.Set("event", "report");
+            obj.Set("rcbRef", rcbRef);
+            obj.Set("rptId", rptId);
+
+            if (ts > 0) {
+                time_t sec = ts / 1000;
+                char buf[64];
+                strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", gmtime(&sec));
+                obj.Set("timestamp", std::string(buf) + "." + std::to_string(ts % 1000));
+            }
+
+            Napi::Array vals = Napi::Array::New(env, reportValues.size());
+            for (size_t i = 0; i < reportValues.size(); ++i) {
+                if (reportValues[i].isValid && !attrNames[i].empty()) {
+                    vals.Set(i, ResultDataToNapi(env, reportValues[i], attrNames[i]));
+                } else {
+                    vals.Set(i, env.Null());
+                }
+            }
+            obj.Set("values", vals);
+
+            Napi::Array rea = Napi::Array::New(env, reasons.size());
+            for (size_t i = 0; i < reasons.size(); ++i) rea.Set(i, reasons[i]);
+            obj.Set("reasonsForInclusion", rea);
+
+            cb.Call({ Napi::String::New(env, "data"), obj });
+        } catch (...) {}
     });
 }
 

@@ -145,6 +145,12 @@ async function handleConnectionOpened() {
         console.log(`Enabling reporting for ${rcbRef} with dataset ${dataSetRef}`);
         await client.enableReporting(rcbRef, dataSetRef);
 
+        // Включение отчётности2
+        const rcbRef2 = 'WAGO61850ServerDevice/LLN0.RP.ReportBlock0201';
+        const dataSetRef2 = 'WAGO61850ServerDevice/LLN0.DataSet02';
+        console.log(`Enabling reporting for ${rcbRef2} with dataset ${dataSetRef2}`);
+        await client.enableReporting(rcbRef2, dataSetRef2);
+
     } catch (err) {
         console.error('Error in handleConnectionOpened:', err.message);
     }
@@ -177,6 +183,11 @@ async function main() {
         const rcbRef = 'WAGO61850ServerDevice/LLN0.RP.ReportBlock0101';
         console.log(`Disabling reporting for ${rcbRef}`);
         await client.disableReporting(rcbRef);
+
+         // Отключение отчётов2
+         const rcbRef2 = 'WAGO61850ServerDevice/LLN0.RP.ReportBlock0102';
+         console.log(`Disabling reporting for ${rcbRef2}`);
+         await client.disableReporting(rcbRef2);
 
         console.log('Client status:', client.getStatus());
         console.log('Closing client...');
