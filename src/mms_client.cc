@@ -53,171 +53,13 @@ Napi::Object MmsClient::Init(Napi::Env env, Napi::Object exports) {
     data.isValid = true;
     data.errorReason = "";
 
-    switch (data.type) {
-        case MMS_FLOAT:
-            data.floatValue = MmsValue_toFloat(val);
-            if (std::isnan(data.floatValue) || std::isinf(data.floatValue)) {
-                data.isValid = false;
-                data.errorReason = "Invalid float";
-            }
-            break;
-
-        case MMS_INTEGER:
-        case MMS_UNSIGNED:
-            data.intValue = MmsValue_toInt64(val);
-            
-            // Специальная обработка для ctlModel
-            if (attrName == "ctlModel") {
-                switch (data.intValue) {
-                    case 0: data.stringValue = "status-only"; break;
-                    case 1: data.stringValue = "direct-with-normal-security"; break;
-                    case 2: data.stringValue = "sbo-with-normal-security"; break;
-                    case 3: data.stringValue = "direct-with-enhanced-security"; break;
-                    case 4: data.stringValue = "sbo-with-enhanced-security"; break;
-                    default: data.stringValue = "unknown(" + std::to_string(data.intValue) + ")"; break;
-                }
-            }
-            break;
-
-        case MMS_BOOLEAN:
-            data.boolValue = MmsValue_getBoolean(val);
-            break;
-
-        case MMS_VISIBLE_STRING: {
-            const char* str = MmsValue_toString(val);
-            data.stringValue = str ? str : "";
-            break;
-        }
-
-        case MMS_UTC_TIME: {
-            uint64_t ms = MmsValue_getUtcTimeInMs(val);
-            time_t sec = ms / 1000;
-            char buf[64];
-            strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", gmtime(&sec));
-            data.stringValue = std::string(buf) + "." + std::to_string(ms % 1000);
-            break;
-        }
-
-        case MMS_BIT_STRING: {
-            int size = MmsValue_getBitStringSize(val);
-            uint8_t* buffer = MmsValue_getOctetStringBuffer(val);
-            
-            // ПРАВИЛЬНОЕ ЧТЕНИЕ БИТОВ (MSB first)
-            uint64_t bits = 0;
-            for (int i = 0; i < size; ++i) {
-                int byte_idx = i / 8;
-                int bit_idx_in_byte = 7 - (i % 8); // MSB first
-                int bit = (buffer[byte_idx] >> bit_idx_in_byte) & 1;
-                bits = (bits << 1) | bit;
-            }
-            
-            data.intValue = static_cast<int64_t>(bits);
-            
-            // Для DPC (Dual Point Controllable) - stVal
-            if (size == 2 && attrName.find("stVal") != std::string::npos) {
-                switch (bits) {
-                    case 0: data.stringValue = "intermediate-state"; break;
-                    case 1: data.stringValue = "off"; break;
-                    case 2: data.stringValue = "on"; break;
-                    case 3: data.stringValue = "bad-state"; break;
-                    default: data.stringValue = "unknown(" + std::to_string(bits) + ")"; break;
-                }
-            }
-            // Для качества (q)
-            else if (attrName == "q" || attrName.find(".q") != std::string::npos) {
-                std::string q;
-                if (bits & QUALITY_VALIDITY_INVALID) q += "Invalid|";
-                if (bits & QUALITY_VALIDITY_QUESTIONABLE) q += "Questionable|";
-                if (q.empty()) q = "Good";
-                else if (!q.empty()) q.pop_back();
-                data.stringValue = q;
-            }
-            break;
-        }
-
-        case MMS_OCTET_STRING: {
-            int size = MmsValue_getOctetStringSize(val);
-            const uint8_t* octets = MmsValue_getOctetStringBuffer(val);
-            std::string octetStr;
-            for (int i = 0; i < size; ++i) {
-                if (octets[i] >= 32 && octets[i] <= 126) {
-                    octetStr += static_cast<char>(octets[i]);
-                } else {
-                    char hex[4];
-                    snprintf(hex, sizeof(hex), "\\x%02X", octets[i]);
-                    octetStr += hex;
-                }
-            }
-            data.stringValue = octetStr;
-            break;
-        }
-
-        case MMS_STRUCTURE: {
-            int size = MmsValue_getArraySize(val);
-            
-            // Определяем, какая это структура
-            bool isPosST = (attrName.find("Pos[ST]") != std::string::npos);
-            bool hasPos = (attrName.find("Pos") != std::string::npos);
-            bool isST = (attrName.size() >= 4 && attrName.substr(attrName.size() - 4) == "[ST]");
-            
-            for (int i = 0; i < size; ++i) {
-                MmsValue* el = MmsValue_getElement(val, i);
-                if (el) {
-                    // Определяем имя вложенного элемента
-                    std::string elementAttrName = attrName;
-                    
-                    // Для Pos[ST] структуры даем элементам правильные имена
-                    if (isPosST && size == 3) {
-                        if (i == 0) elementAttrName = "stVal";
-                        else if (i == 1) elementAttrName = "q";
-                        else if (i == 2) elementAttrName = "t";
-                    }
-                    // Для других структур
-                    else if (hasPos && isST && size == 3) {
-                        if (i == 0) elementAttrName = "stVal";
-                        else if (i == 1) elementAttrName = "q";
-                        else if (i == 2) elementAttrName = "t";
-                    }
-                    
-                    data.structureElements.push_back(ConvertMmsValueToResultData(el, elementAttrName));
-                }
-            }
-            break;
-        }
-
-        case MMS_ARRAY: {
-            int size = MmsValue_getArraySize(val);
-            for (int i = 0; i < size; ++i) {
-                MmsValue* el = MmsValue_getElement(val, i);
-                if (el) {
-                    data.arrayElements.push_back(ConvertMmsValueToResultData(el, attrName));
-                }
-            }
-            break;
-        }
-
-        default:
-            data.isValid = false;
-            data.errorReason = "Unsupported MMS type: " + std::to_string(data.type);
-            break;
-    }
-    
-    return data;
-}*/
-
-static MmsClient::ResultData ConvertMmsValueToResultData(MmsValue* val, const std::string& attrName) {
-    MmsClient::ResultData data;
-    if (!val) {
-        data.type = MMS_DATA_ACCESS_ERROR;
+    // Проверяем, что тип поддерживается
+    if (data.type < 0 || data.type > 14) {
         data.isValid = false;
-        data.errorReason = "Null value";
+        data.errorReason = "Unsupported MMS type";
         return data;
     }
 
-    data.type = MmsValue_getType(val);
-    data.isValid = true;
-    data.errorReason = "";
-
     switch (data.type) {
         case MMS_FLOAT:
             data.floatValue = MmsValue_toFloat(val);
@@ -241,6 +83,10 @@ static MmsClient::ResultData ConvertMmsValueToResultData(MmsValue* val, const st
                     case 4: data.stringValue = "sbo-with-enhanced-security"; break;
                     default: data.stringValue = "unknown(" + std::to_string(data.intValue) + ")"; break;
                 }
+            }
+            // Для INS (Integer Status) - просто число
+            else if (attrName.find("OpCap") != std::string::npos || attrName.find("CBOpCap") != std::string::npos) {
+                // Ничего не делаем, оставляем как число
             }
             break;
 
@@ -267,7 +113,6 @@ static MmsClient::ResultData ConvertMmsValueToResultData(MmsValue* val, const st
             int size = MmsValue_getBitStringSize(val);
             
             // Для IEC 61850 DPC значений (stVal) нам нужно преобразовать LSB-first в MSB-first
-            // потому что стандарт IEC 61850 использует MSB-first для отображения
             if (size == 2 && attrName.find("stVal") != std::string::npos) {
                 // Получаем значение как LSB-first
                 uint32_t lsbValue = MmsValue_getBitStringAsInteger(val);
@@ -277,7 +122,6 @@ static MmsClient::ResultData ConvertMmsValueToResultData(MmsValue* val, const st
                 if (size == 2) {
                     // LSB-first: бит0=младший, бит1=старший
                     // MSB-first: бит0=старший, бит1=младший
-                    // Пример: LSB "01" (бит0=1, бит1=0) -> MSB "10" (бит0=1, бит1=0 в MSB порядке)
                     for (int i = 0; i < size; i++) {
                         int bit = (lsbValue >> i) & 1;
                         msbValue |= (bit << (size - 1 - i));
@@ -295,7 +139,7 @@ static MmsClient::ResultData ConvertMmsValueToResultData(MmsValue* val, const st
                     default: data.stringValue = "unknown(" + std::to_string(msbValue) + ")"; break;
                 }
             }
-            // Для качества (q) - оставляем как есть, так как биты флагов обычно обрабатываются иначе
+            // Для качества (q)
             else if (attrName == "q" || attrName.find(".q") != std::string::npos) {
                 uint32_t bits = MmsValue_getBitStringAsInteger(val);
                 data.intValue = static_cast<int64_t>(bits);
@@ -307,7 +151,7 @@ static MmsClient::ResultData ConvertMmsValueToResultData(MmsValue* val, const st
                 else if (!q.empty()) q.pop_back();
                 data.stringValue = q;
             }
-            // Для других битовых строк - используем как есть
+            // Для других битовых строк
             else {
                 uint32_t bits = MmsValue_getBitStringAsInteger(val);
                 data.intValue = static_cast<int64_t>(bits);
@@ -336,9 +180,22 @@ static MmsClient::ResultData ConvertMmsValueToResultData(MmsValue* val, const st
             int size = MmsValue_getArraySize(val);
             
             // Определяем, какая это структура
-            bool isPosST = (attrName.find("Pos[ST]") != std::string::npos);
-            bool hasPos = (attrName.find("Pos") != std::string::npos);
-            bool isST = (attrName.size() >= 4 && attrName.substr(attrName.size() - 4) == "[ST]");
+            std::string name = attrName;
+            std::transform(name.begin(), name.end(), name.begin(), ::tolower);
+            
+            bool isPos = (name.find("pos") != std::string::npos);
+            bool isST = (name.size() >= 4 && name.substr(name.size() - 4) == "[st]");
+            bool isCO = (name.size() >= 4 && name.substr(name.size() - 4) == "[co]");
+            bool isCF = (name.size() >= 4 && name.substr(name.size() - 4) == "[cf]");
+            bool isDC = (name.size() >= 4 && name.substr(name.size() - 4) == "[dc]");
+            bool isEX = (name.size() >= 4 && name.substr(name.size() - 4) == "[ex]");
+            
+            bool hasStVal = (name.find("stval") != std::string::npos);
+            bool hasQ = (name.find("q") != std::string::npos);
+            bool hasT = (name.find("t") != std::string::npos);
+            bool hasNamPlt = (name.find("namplt") != std::string::npos);
+            bool hasPhyNam = (name.find("phynam") != std::string::npos);
+            bool hasCBOpCap = (name.find("cbopcap") != std::string::npos || name.find("opcap") != std::string::npos);
             
             for (int i = 0; i < size; ++i) {
                 MmsValue* el = MmsValue_getElement(val, i);
@@ -346,17 +203,257 @@ static MmsClient::ResultData ConvertMmsValueToResultData(MmsValue* val, const st
                     // Определяем имя вложенного элемента
                     std::string elementAttrName = attrName;
                     
-                    // Для Pos[ST] структуры даем элементам правильные имена
-                    if (isPosST && size == 3) {
+                    // Для структур [ST] с элементами stVal, q, t
+                    if ((isST || (isPos && hasStVal)) && size == 3) {
                         if (i == 0) elementAttrName = "stVal";
                         else if (i == 1) elementAttrName = "q";
                         else if (i == 2) elementAttrName = "t";
                     }
-                    // Для других структур
-                    else if (hasPos && isST && size == 3) {
+                    // Для CBOpCap[ST] структуры
+                    else if (hasCBOpCap && size == 3) {
                         if (i == 0) elementAttrName = "stVal";
                         else if (i == 1) elementAttrName = "q";
                         else if (i == 2) elementAttrName = "t";
+                    }
+                    // Для NamPlt[DC] структуры
+                    else if (hasNamPlt && isDC) {
+                        if (size == 4) {
+                            if (i == 0) elementAttrName = "vendor";
+                            else if (i == 1) elementAttrName = "swRev";
+                            else if (i == 2) elementAttrName = "d";
+                            else if (i == 3) elementAttrName = "configRev";
+                        } else if (size == 3) {
+                            if (i == 0) elementAttrName = "vendor";
+                            else if (i == 1) elementAttrName = "swRev";
+                            else if (i == 2) elementAttrName = "d";
+                        }
+                    }
+                    // Для PhyNam[DC] структуры
+                    else if (hasPhyNam && isDC && size == 1) {
+                        elementAttrName = "vendor";
+                    }
+                    
+                    data.structureElements.push_back(ConvertMmsValueToResultData(el, elementAttrName));
+                }
+            }
+            break;
+        }
+
+        case MMS_ARRAY: {
+            int size = MmsValue_getArraySize(val);
+            for (int i = 0; i < size; ++i) {
+                MmsValue* el = MmsValue_getElement(val, i);
+                if (el) {
+                    data.arrayElements.push_back(ConvertMmsValueToResultData(el, attrName));
+                }
+            }
+            break;
+        }
+
+       default:
+            data.isValid = false;
+            data.errorReason = "Unsupported MMS type";
+            break;    
+    }
+    
+    return data;
+}*/
+
+static MmsClient::ResultData ConvertMmsValueToResultData(MmsValue* val, const std::string& attrName) {
+    MmsClient::ResultData data;
+    if (!val) {
+        data.type = MMS_DATA_ACCESS_ERROR;
+        data.isValid = false;
+        data.errorReason = "Null value";
+        return data;
+    }
+
+    data.type = MmsValue_getType(val);
+    data.isValid = true;
+    data.errorReason = "";
+
+    // Проверяем, что тип поддерживается
+    if (data.type < 0 || data.type > 14) {
+        data.isValid = false;
+        data.errorReason = "Unsupported MMS type";
+        return data;
+    }
+
+    switch (data.type) {
+        case MMS_FLOAT:
+            data.floatValue = MmsValue_toFloat(val);
+            if (std::isnan(data.floatValue) || std::isinf(data.floatValue)) {
+                data.isValid = false;
+                data.errorReason = "Invalid float";
+            }
+            break;
+
+        case MMS_INTEGER:
+        case MMS_UNSIGNED:
+            data.intValue = MmsValue_toInt64(val);
+            
+            // Специальная обработка для ctlModel
+            if (attrName == "ctlModel") {
+                switch (data.intValue) {
+                    case 0: data.stringValue = "status-only"; break;
+                    case 1: data.stringValue = "direct-with-normal-security"; break;
+                    case 2: data.stringValue = "sbo-with-normal-security"; break;
+                    case 3: data.stringValue = "direct-with-enhanced-security"; break;
+                    case 4: data.stringValue = "sbo-with-enhanced-security"; break;
+                    default: data.stringValue = "unknown(" + std::to_string(data.intValue) + ")"; break;
+                }
+            }
+            // Для INS (Integer Status) - просто число
+            else if (attrName.find("OpCap") != std::string::npos || attrName.find("CBOpCap") != std::string::npos) {
+                // Ничего не делаем, оставляем как число
+            }
+            break;
+
+        case MMS_BOOLEAN:
+            data.boolValue = MmsValue_getBoolean(val);
+            break;
+
+        case MMS_VISIBLE_STRING: {
+            const char* str = MmsValue_toString(val);
+            data.stringValue = str ? str : "";
+            break;
+        }
+
+        case MMS_UTC_TIME: {
+            // Получаем время в миллисекундах с 1 января 1970
+            data.intValue = static_cast<int64_t>(MmsValue_getUtcTimeInMs(val));
+            
+            // Также сохраняем строковое представление для обратной совместимости
+            uint64_t ms = static_cast<uint64_t>(data.intValue);
+            time_t sec = ms / 1000;
+            char buf[64];
+            strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", gmtime(&sec));
+            data.stringValue = std::string(buf) + "." + std::to_string(ms % 1000);
+            break;
+        }
+
+        case MMS_BIT_STRING: {
+            int size = MmsValue_getBitStringSize(val);
+            
+            // Для IEC 61850 DPC значений (stVal) нам нужно преобразовать LSB-first в MSB-first
+            if (size == 2 && attrName.find("stVal") != std::string::npos) {
+                // Получаем значение как LSB-first
+                uint32_t lsbValue = MmsValue_getBitStringAsInteger(val);
+                
+                // Преобразуем LSB-first в MSB-first для 2-битного значения
+                uint32_t msbValue = 0;
+                if (size == 2) {
+                    // LSB-first: бит0=младший, бит1=старший
+                    // MSB-first: бит0=старший, бит1=младший
+                    for (int i = 0; i < size; i++) {
+                        int bit = (lsbValue >> i) & 1;
+                        msbValue |= (bit << (size - 1 - i));
+                    }
+                }
+                
+                data.intValue = static_cast<int64_t>(msbValue);
+                
+                // Теперь используем MSB-first значение для DPC
+                switch (msbValue) {
+                    case 0: data.stringValue = "intermediate-state"; break;
+                    case 1: data.stringValue = "off"; break;    // 01 в MSB
+                    case 2: data.stringValue = "on"; break;     // 10 в MSB
+                    case 3: data.stringValue = "bad-state"; break;
+                    default: data.stringValue = "unknown(" + std::to_string(msbValue) + ")"; break;
+                }
+            }
+            // Для качества (q)
+            else if (attrName == "q" || attrName.find(".q") != std::string::npos) {
+                uint32_t bits = MmsValue_getBitStringAsInteger(val);
+                data.intValue = static_cast<int64_t>(bits);
+                
+                std::string q;
+                if (bits & QUALITY_VALIDITY_INVALID) q += "Invalid|";
+                if (bits & QUALITY_VALIDITY_QUESTIONABLE) q += "Questionable|";
+                if (q.empty()) q = "Good";
+                else if (!q.empty()) q.pop_back();
+                data.stringValue = q;
+            }
+            // Для других битовых строк
+            else {
+                uint32_t bits = MmsValue_getBitStringAsInteger(val);
+                data.intValue = static_cast<int64_t>(bits);
+            }
+            break;
+        }
+
+        case MMS_OCTET_STRING: {
+            int size = MmsValue_getOctetStringSize(val);
+            const uint8_t* octets = MmsValue_getOctetStringBuffer(val);
+            std::string octetStr;
+            for (int i = 0; i < size; ++i) {
+                if (octets[i] >= 32 && octets[i] <= 126) {
+                    octetStr += static_cast<char>(octets[i]);
+                } else {
+                    char hex[4];
+                    snprintf(hex, sizeof(hex), "\\x%02X", octets[i]);
+                    octetStr += hex;
+                }
+            }
+            data.stringValue = octetStr;
+            break;
+        }
+
+        case MMS_STRUCTURE: {
+            int size = MmsValue_getArraySize(val);
+            
+            // Определяем, какая это структура
+            std::string name = attrName;
+            std::transform(name.begin(), name.end(), name.begin(), ::tolower);
+            
+            bool isPos = (name.find("pos") != std::string::npos);
+            bool isST = (name.size() >= 4 && name.substr(name.size() - 4) == "[st]");
+            bool isCO = (name.size() >= 4 && name.substr(name.size() - 4) == "[co]");
+            bool isCF = (name.size() >= 4 && name.substr(name.size() - 4) == "[cf]");
+            bool isDC = (name.size() >= 4 && name.substr(name.size() - 4) == "[dc]");
+            bool isEX = (name.size() >= 4 && name.substr(name.size() - 4) == "[ex]");
+            
+            bool hasStVal = (name.find("stval") != std::string::npos);
+            bool hasQ = (name.find("q") != std::string::npos);
+            bool hasT = (name.find("t") != std::string::npos);
+            bool hasNamPlt = (name.find("namplt") != std::string::npos);
+            bool hasPhyNam = (name.find("phynam") != std::string::npos);
+            bool hasCBOpCap = (name.find("cbopcap") != std::string::npos || name.find("opcap") != std::string::npos);
+            
+            for (int i = 0; i < size; ++i) {
+                MmsValue* el = MmsValue_getElement(val, i);
+                if (el) {
+                    // Определяем имя вложенного элемента
+                    std::string elementAttrName = attrName;
+                    
+                    // Для структур [ST] с элементами stVal, q, t
+                    if ((isST || (isPos && hasStVal)) && size == 3) {
+                        if (i == 0) elementAttrName = "stVal";
+                        else if (i == 1) elementAttrName = "q";
+                        else if (i == 2) elementAttrName = "t";
+                    }
+                    // Для CBOpCap[ST] структуры
+                    else if (hasCBOpCap && size == 3) {
+                        if (i == 0) elementAttrName = "stVal";
+                        else if (i == 1) elementAttrName = "q";
+                        else if (i == 2) elementAttrName = "t";
+                    }
+                    // Для NamPlt[DC] структуры
+                    else if (hasNamPlt && isDC) {
+                        if (size == 4) {
+                            if (i == 0) elementAttrName = "vendor";
+                            else if (i == 1) elementAttrName = "swRev";
+                            else if (i == 2) elementAttrName = "d";
+                            else if (i == 3) elementAttrName = "configRev";
+                        } else if (size == 3) {
+                            if (i == 0) elementAttrName = "vendor";
+                            else if (i == 1) elementAttrName = "swRev";
+                            else if (i == 2) elementAttrName = "d";
+                        }
+                    }
+                    // Для PhyNam[DC] структуры
+                    else if (hasPhyNam && isDC && size == 1) {
+                        elementAttrName = "vendor";
                     }
                     
                     data.structureElements.push_back(ConvertMmsValueToResultData(el, elementAttrName));
@@ -378,14 +475,15 @@ static MmsClient::ResultData ConvertMmsValueToResultData(MmsValue* val, const st
 
         default:
             data.isValid = false;
-            data.errorReason = "Unsupported MMS type: " + std::to_string(data.type);
+            data.errorReason = "Unsupported MMS type";
             break;
     }
     
     return data;
 }
 
-static Napi::Value ResultDataToNapi(Napi::Env env, const MmsClient::ResultData& data, const std::string& attrName = "") {
+
+/*static Napi::Value ResultDataToNapi(Napi::Env env, const MmsClient::ResultData& data, const std::string& attrName = "") {
     if (!data.isValid) {
         return Napi::String::New(env, data.errorReason);
     }
@@ -414,10 +512,6 @@ static Napi::Value ResultDataToNapi(Napi::Env env, const MmsClient::ResultData& 
             return Napi::String::New(env, data.stringValue);
 
         case MMS_BIT_STRING:
-            if (!data.stringValue.empty()) {
-                return Napi::String::New(env, data.stringValue);
-            }
-            return Napi::Number::New(env, static_cast<double>(data.intValue));
             if (!data.stringValue.empty()) {
                 return Napi::String::New(env, data.stringValue);
             }
@@ -627,17 +721,8 @@ static Napi::Value ResultDataToNapi(Napi::Env env, const MmsClient::ResultData& 
             }
             
             // === ОБРАБОТКА Pos[ST] (DPC - Dual Point Controllable) ===
-            else if (hasPos && isST && data.structureElements.size() >= 3) {
+            else if ((hasPos && isST) && data.structureElements.size() >= 3) {
                 Napi::Object stObj = Napi::Object::New(env);
-                
-                // Для Pos[ST] структура должна иметь правильный порядок:
-                // 0: stVal (DPC), 1: q, 2: t
-                
-                // Проверяем, правильно ли определены элементы
-                printf("DEBUG: Processing Pos[ST] structure, elements: %zu\n", data.structureElements.size());
-                for (size_t idx = 0; idx < data.structureElements.size(); ++idx) {
-                    printf("  Element %zu: type=%d\n", idx, data.structureElements[idx].type);
-                }
                 
                 // stVal - DPC (битовая строка 2 бита)
                 if (data.structureElements.size() > 0) {
@@ -666,48 +751,363 @@ static Napi::Value ResultDataToNapi(Napi::Env env, const MmsClient::ResultData& 
                 return stObj;
             }
             
-            // === ОБРАБОТКА NamPlt (без указания FC) ===
-            else if (hasNamPlt) {
-                if (data.structureElements.size() == 4) {
-                    Napi::Object nampltObj = Napi::Object::New(env);
-                    nampltObj.Set("vendor", ResultDataToNapi(env, data.structureElements[0]));
-                    nampltObj.Set("swRev", ResultDataToNapi(env, data.structureElements[1]));
-                    nampltObj.Set("d", ResultDataToNapi(env, data.structureElements[2]));
-                    nampltObj.Set("configRev", ResultDataToNapi(env, data.structureElements[3]));
-                    return nampltObj;
-                } else if (data.structureElements.size() == 3) {
-                    Napi::Object nampltObj = Napi::Object::New(env);
-                    nampltObj.Set("vendor", ResultDataToNapi(env, data.structureElements[0]));
-                    nampltObj.Set("swRev", ResultDataToNapi(env, data.structureElements[1]));
-                    nampltObj.Set("d", ResultDataToNapi(env, data.structureElements[2]));
-                    return nampltObj;
+            // === ОБРАБОТКА ДРУГИХ СТРУКТУР С ИМЕНАМИ ===
+            // Для структур, которые не попали в вышеуказанные категории,
+            // но имеют имена элементов (не цифровые индексы)
+            else {
+                // Создаем объект с именами полей
+                Napi::Object obj = Napi::Object::New(env);
+                
+                for (size_t i = 0; i < data.structureElements.size(); ++i) {
+                    std::string elementName;
+                    
+                    // Пытаемся определить имя элемента по контексту и индексу
+                    if (i == 0 && hasStVal) elementName = "stVal";
+                    else if (i == 1 && hasQ) elementName = "q";
+                    else if (i == 2 && hasT) elementName = "t";
+                    else if (i == 0 && hasNamPlt) elementName = "vendor";
+                    else if (i == 1 && hasNamPlt) elementName = "swRev";
+                    else if (i == 2 && hasNamPlt) elementName = "d";
+                    else if (i == 3 && hasNamPlt && data.structureElements.size() == 4) elementName = "configRev";
+                    else if (i == 0 && hasPhyNam) elementName = "vendor";
+                    else {
+                        // Если не можем определить имя, используем индекс
+                        elementName = std::to_string(i);
+                    }
+                    
+                    obj.Set(elementName, ResultDataToNapi(env, data.structureElements[i]));
+                }
+                return obj;
+            }
+            
+            // Если не попали ни в одну категорию - возвращаем нумерованные поля
+            Napi::Object defaultObj = Napi::Object::New(env);
+            for (size_t i = 0; i < data.structureElements.size(); ++i) {
+                defaultObj.Set(std::to_string(i), ResultDataToNapi(env, data.structureElements[i]));
+            }
+            return defaultObj;
+        }
+
+        case MMS_ARRAY: {
+            Napi::Array arr = Napi::Array::New(env, data.arrayElements.size());
+            for (size_t i = 0; i < data.arrayElements.size(); ++i) {
+                arr.Set(i, ResultDataToNapi(env, data.arrayElements[i]));
+            }
+            return arr;
+        }
+
+        default:
+            return Napi::String::New(env, "type_" + std::to_string(data.type));
+    }
+}*/
+
+static Napi::Value ResultDataToNapi(Napi::Env env, const MmsClient::ResultData& data, const std::string& attrName = "") {
+    if (!data.isValid) {
+        return Napi::String::New(env, data.errorReason);
+    }
+
+    switch (data.type) {
+        case MMS_FLOAT:
+            return Napi::Number::New(env, data.floatValue);
+
+        case MMS_INTEGER:
+        case MMS_UNSIGNED:
+            if (!data.stringValue.empty()) {
+                return Napi::String::New(env, data.stringValue);
+            }
+            // CBOpCap.stVal - это целое число (INS), не преобразовывать в строку
+            if (attrName.find("OpCap") != std::string::npos || attrName.find("CBOpCap") != std::string::npos) {
+                return Napi::Number::New(env, static_cast<double>(data.intValue));
+            }
+            // ctlModel уже преобразован в строку в ConvertMmsValueToResultData
+            return Napi::Number::New(env, static_cast<double>(data.intValue));
+
+        case MMS_BOOLEAN:
+            return Napi::Boolean::New(env, data.boolValue);
+
+        case MMS_VISIBLE_STRING:
+            return Napi::String::New(env, data.stringValue);
+            
+        case MMS_UTC_TIME:
+            // Возвращаем время как число (миллисекунды с 1 января 1970)
+            // Используем double для хранения больших чисел в JavaScript
+            return Napi::Number::New(env, static_cast<double>(data.intValue));
+
+        case MMS_BIT_STRING:
+            if (!data.stringValue.empty()) {
+                return Napi::String::New(env, data.stringValue);
+            }
+            return Napi::Number::New(env, static_cast<double>(data.intValue));
+
+        case MMS_OCTET_STRING:
+            return Napi::String::New(env, data.stringValue);
+
+        case MMS_STRUCTURE: {
+            // Создаем объект для результата
+            Napi::Object obj = Napi::Object::New(env);
+            
+            // Нормализуем имя для сравнения (в нижнем регистре)
+            std::string name = attrName;
+            std::transform(name.begin(), name.end(), name.begin(), ::tolower);
+            
+            // === Проверяем тип структуры по окончанию имени ===
+            bool isCO = false, isCF = false, isEX = false, isDC = false, isST = false;
+            
+            // Проверяем окончание на наличие [FC] паттерна
+            if (name.size() >= 4) {
+                std::string ending = name.substr(name.size() - 4);
+                isCO = (ending == "[co]");
+                isCF = (ending == "[cf]");
+                isEX = (ending == "[ex]");
+                isDC = (ending == "[dc]");
+                isST = (ending == "[st]");
+            }
+            
+            // Также проверяем наличие ключевых слов в имени
+            bool hasOper = name.find("oper") != std::string::npos;
+            bool hasSBOw = name.find("sbow") != std::string::npos;
+            bool hasCancel = name.find("cancel") != std::string::npos;
+            bool hasNamPlt = name.find("namplt") != std::string::npos;
+            bool hasPhyNam = name.find("phynam") != std::string::npos;
+            bool hasStVal = name.find("stval") != std::string::npos;
+            bool hasQ = name.find("q") != std::string::npos;
+            bool hasT = name.find("t") != std::string::npos;
+            bool hasPos = name.find("pos") != std::string::npos;
+            bool hasCBOpCap = name.find("cbopcap") != std::string::npos || name.find("opcap") != std::string::npos;
+            
+            // === ОБРАБОТКА CONTROL OBJECTS (CO) ===
+            if ((isCO || hasOper || hasSBOw || hasCancel) && data.structureElements.size() >= 6) {
+                Napi::Object control = Napi::Object::New(env);
+                
+                // 1. ctlVal
+                control.Set("ctlVal", ResultDataToNapi(env, data.structureElements[0]));
+                
+                // 2. origin (структура из 2 элементов)
+                Napi::Object origin = Napi::Object::New(env);
+                if (data.structureElements[1].structureElements.size() >= 2) {
+                    // orCat (целое число → строка)
+                    int cat = data.structureElements[1].structureElements[0].intValue;
+                    const char* cats[] = {
+                        "not-supported", "bay-control", "station-control", "remote-control",
+                        "automatic-bay", "automatic-station", "automatic-remote",
+                        "maintenance", "process"
+                    };
+                    std::string catStr = (cat >= 0 && cat < 9) ? cats[cat] : "unknown";
+                    origin.Set("orCat", Napi::String::New(env, catStr));
+                    
+                    // orIdent
+                    origin.Set("orIdent", ResultDataToNapi(env, data.structureElements[1].structureElements[1]));
+                } else {
+                    origin.Set("orCat", Napi::String::New(env, "not-supported"));
+                    origin.Set("orIdent", Napi::String::New(env, ""));
+                }
+                control.Set("origin", origin);
+                
+                // 3. ctlNum
+                control.Set("ctlNum", ResultDataToNapi(env, data.structureElements[2]));
+                
+                // 4. T (время) - теперь в миллисекундах
+                control.Set("T", ResultDataToNapi(env, data.structureElements[3]));
+                
+                // 5. Test
+                control.Set("Test", ResultDataToNapi(env, data.structureElements[4]));
+                
+                // 6. Check
+                control.Set("Check", ResultDataToNapi(env, data.structureElements[5]));
+                
+                // Определяем имя поля
+                if (hasSBOw) {
+                    obj.Set("SBOw", control);
+                } else if (hasCancel) {
+                    obj.Set("Cancel", control);
+                } else {
+                    // По умолчанию Oper
+                    obj.Set("Oper", control);
+                }
+                return obj;
+            }
+            // Если это вложенный CO (массив из 1 элемента)
+            else if ((isCO || hasOper || hasSBOw || hasCancel) && 
+                     data.structureElements.size() == 1 &&
+                     data.structureElements[0].type == MMS_STRUCTURE &&
+                     data.structureElements[0].structureElements.size() >= 6) {
+                return ResultDataToNapi(env, data.structureElements[0], attrName);
+            }
+            
+            // === ОБРАБОТКА CONFIGURATION (CF) ===
+            else if (isCF && data.structureElements.size() == 1) {
+                const MmsClient::ResultData& cfData = data.structureElements[0];
+                
+                // Определяем имя поля на основе родительского имени
+                std::string fieldName;
+                
+                // Извлекаем базовое имя из attrName (например, "Mod" из "Mod[CF]")
+                size_t bracketPos = attrName.find('[');
+                if (bracketPos != std::string::npos) {
+                    fieldName = attrName.substr(0, bracketPos);
+                } else {
+                    fieldName = attrName;
+                }
+                
+                // Для числовых значений ctlModel
+                if ((fieldName == "Mod" || fieldName == "Pos" || 
+                     fieldName == "BlkOpn" || fieldName == "BlkCls") &&
+                    (cfData.type == MMS_INTEGER || cfData.type == MMS_UNSIGNED)) {
+                    
+                    int value = cfData.intValue;
+                    const char* ctlModelStr = "";
+                    switch (value) {
+                        case 0: ctlModelStr = "status-only"; break;
+                        case 1: ctlModelStr = "direct-with-normal-security"; break;
+                        case 2: ctlModelStr = "sbo-with-normal-security"; break;
+                        case 3: ctlModelStr = "direct-with-enhanced-security"; break;
+                        case 4: ctlModelStr = "sbo-with-enhanced-security"; break;
+                        default: ctlModelStr = "unknown";
+                    }
+                    
+                    Napi::Object cfObj = Napi::Object::New(env);
+                    cfObj.Set("ctlModel", Napi::String::New(env, ctlModelStr));
+                    return cfObj;
+                }
+                // Для других CF полей
+                else if (cfData.type == MMS_INTEGER || cfData.type == MMS_UNSIGNED) {
+                    Napi::Object cfObj = Napi::Object::New(env);
+                    cfObj.Set(fieldName, Napi::Number::New(env, cfData.intValue));
+                    return cfObj;
+                }
+                else if (cfData.type == MMS_VISIBLE_STRING || cfData.type == MMS_OCTET_STRING) {
+                    Napi::Object cfObj = Napi::Object::New(env);
+                    cfObj.Set(fieldName, Napi::String::New(env, cfData.stringValue));
+                    return cfObj;
                 }
             }
             
-            // === ОБРАБОТКА PhyNam (без указания FC) ===
-            else if (hasPhyNam && !data.structureElements.empty()) {
-                Napi::Object phyNamObj = Napi::Object::New(env);
-                phyNamObj.Set("vendor", ResultDataToNapi(env, data.structureElements[0]));
-                return phyNamObj;
+            // === ОБРАБОТКА EXTERNAL (EX) ===
+            else if (isEX && data.structureElements.size() == 1) {
+                Napi::Object exObj = Napi::Object::New(env);
+                exObj.Set("ldNs", ResultDataToNapi(env, data.structureElements[0]));
+                return exObj;
             }
             
-            // === ПО УМОЛЧАНИЮ — нумерованные поля ===
-            // Это должно быть последним вариантом
-            for (size_t i = 0; i < data.structureElements.size(); ++i) {
-                std::string elementName = std::to_string(i);
-                
-                // Пытаемся определить имя элемента по контексту
-                if (i == 0 && hasStVal) elementName = "stVal";
-                else if (i == 1 && hasQ) elementName = "q";
-                else if (i == 2 && hasT) elementName = "t";
-                else if (i == 0 && hasNamPlt) elementName = "vendor";
-                else if (i == 1 && hasNamPlt) elementName = "swRev";
-                else if (i == 2 && hasNamPlt) elementName = "d";
-                else if (i == 3 && hasNamPlt && data.structureElements.size() == 4) elementName = "configRev";
-                
-                obj.Set(elementName, ResultDataToNapi(env, data.structureElements[i]));
+            // === ОБРАБОТКА DOCUMENT (DC) ===
+            else if (isDC) {
+                // Для NamPlt
+                if (hasNamPlt) {
+                    if (data.structureElements.size() == 4) {
+                        // DC: vendor, swRev, d, configRev
+                        Napi::Object nampltObj = Napi::Object::New(env);
+                        nampltObj.Set("vendor", ResultDataToNapi(env, data.structureElements[0]));
+                        nampltObj.Set("swRev", ResultDataToNapi(env, data.structureElements[1]));
+                        nampltObj.Set("d", ResultDataToNapi(env, data.structureElements[2]));
+                        nampltObj.Set("configRev", ResultDataToNapi(env, data.structureElements[3]));
+                        return nampltObj;
+                    } else if (data.structureElements.size() == 3) {
+                        // Другие NamPlt: vendor, swRev, d
+                        Napi::Object nampltObj = Napi::Object::New(env);
+                        nampltObj.Set("vendor", ResultDataToNapi(env, data.structureElements[0]));
+                        nampltObj.Set("swRev", ResultDataToNapi(env, data.structureElements[1]));
+                        nampltObj.Set("d", ResultDataToNapi(env, data.structureElements[2]));
+                        return nampltObj;
+                    }
+                }
+                // Для PhyNam
+                else if (hasPhyNam && !data.structureElements.empty()) {
+                    Napi::Object phyNamObj = Napi::Object::New(env);
+                    phyNamObj.Set("vendor", ResultDataToNapi(env, data.structureElements[0]));
+                    return phyNamObj;
+                }
             }
-            return obj;
+            
+            // === ОБРАБОТКА CBOpCap[ST] (INS - Integer Status) ===
+            else if (hasCBOpCap && data.structureElements.size() >= 3) {
+                Napi::Object stObj = Napi::Object::New(env);
+                
+                // CBOpCap.stVal - это INS (Integer Status), не DPC!
+                // Проверяем тип первого элемента
+                if (data.structureElements[0].type == MMS_INTEGER || 
+                    data.structureElements[0].type == MMS_UNSIGNED) {
+                    // Это целое число, возвращаем как число
+                    stObj.Set("stVal", Napi::Number::New(env, static_cast<double>(data.structureElements[0].intValue)));
+                } else {
+                    // На всякий случай используем обычное преобразование
+                    stObj.Set("stVal", ResultDataToNapi(env, data.structureElements[0], "stVal"));
+                }
+                
+                // q - качество
+                stObj.Set("q", ResultDataToNapi(env, data.structureElements[1], "q"));
+                
+                // t - время (в миллисекундах)
+                stObj.Set("t", ResultDataToNapi(env, data.structureElements[2], "t"));
+                
+                return stObj;
+            }
+            
+            // === ОБРАБОТКА Pos[ST] (DPC - Dual Point Controllable) ===
+            else if ((hasPos && isST) && data.structureElements.size() >= 3) {
+                Napi::Object stObj = Napi::Object::New(env);
+                
+                // stVal - DPC (битовая строка 2 бита)
+                if (data.structureElements.size() > 0) {
+                    stObj.Set("stVal", ResultDataToNapi(env, data.structureElements[0], "stVal"));
+                }
+                
+                // q - качество
+                if (data.structureElements.size() > 1) {
+                    stObj.Set("q", ResultDataToNapi(env, data.structureElements[1], "q"));
+                }
+                
+                // t - время (в миллисекундах)
+                if (data.structureElements.size() > 2) {
+                    stObj.Set("t", ResultDataToNapi(env, data.structureElements[2], "t"));
+                }
+                
+                return stObj;
+            }
+            
+            // === ОБРАБОТКА ДРУГИХ STATUS (ST) ===
+            else if ((isST || hasStVal || hasQ || hasT) && data.structureElements.size() >= 3) {
+                Napi::Object stObj = Napi::Object::New(env);
+                stObj.Set("stVal", ResultDataToNapi(env, data.structureElements[0], "stVal"));
+                stObj.Set("q", ResultDataToNapi(env, data.structureElements[1], "q"));
+                stObj.Set("t", ResultDataToNapi(env, data.structureElements[2], "t"));
+                return stObj;
+            }
+            
+            // === ОБРАБОТКА ДРУГИХ СТРУКТУР С ИМЕНАМИ ===
+            // Для структур, которые не попали в вышеуказанные категории,
+            // но имеют имена элементов (не цифровые индексы)
+            else {
+                // Создаем объект с именами полей
+                Napi::Object obj = Napi::Object::New(env);
+                
+                for (size_t i = 0; i < data.structureElements.size(); ++i) {
+                    std::string elementName;
+                    
+                    // Пытаемся определить имя элемента по контексту и индексу
+                    if (i == 0 && hasStVal) elementName = "stVal";
+                    else if (i == 1 && hasQ) elementName = "q";
+                    else if (i == 2 && hasT) elementName = "t";
+                    else if (i == 0 && hasNamPlt) elementName = "vendor";
+                    else if (i == 1 && hasNamPlt) elementName = "swRev";
+                    else if (i == 2 && hasNamPlt) elementName = "d";
+                    else if (i == 3 && hasNamPlt && data.structureElements.size() == 4) elementName = "configRev";
+                    else if (i == 0 && hasPhyNam) elementName = "vendor";
+                    else {
+                        // Если не можем определить имя, используем индекс
+                        elementName = std::to_string(i);
+                    }
+                    
+                    obj.Set(elementName, ResultDataToNapi(env, data.structureElements[i]));
+                }
+                return obj;
+            }
+            
+            // Если не попали ни в одну категорию - возвращаем нумерованные поля
+            Napi::Object defaultObj = Napi::Object::New(env);
+            for (size_t i = 0; i < data.structureElements.size(); ++i) {
+                defaultObj.Set(std::to_string(i), ResultDataToNapi(env, data.structureElements[i]));
+            }
+            return defaultObj;
         }
 
         case MMS_ARRAY: {
@@ -724,7 +1124,7 @@ static Napi::Value ResultDataToNapi(Napi::Env env, const MmsClient::ResultData& 
 }
 
 // ResultData → std::string (для GetLogicalDevices)
-static std::string ResultDataToString(const MmsClient::ResultData& data) {
+/*static std::string ResultDataToString(const MmsClient::ResultData& data) {
     if (!data.isValid) return data.errorReason;
     switch (data.type) {
         case MMS_FLOAT: return std::to_string(data.floatValue);
@@ -733,6 +1133,23 @@ static std::string ResultDataToString(const MmsClient::ResultData& data) {
         case MMS_BOOLEAN: return data.boolValue ? "true" : "false";
         case MMS_VISIBLE_STRING:
         case MMS_UTC_TIME: return data.stringValue;
+        case MMS_OCTET_STRING: return data.stringValue;
+        case MMS_BIT_STRING: return data.stringValue.empty() ? std::to_string(data.intValue) : data.stringValue;
+        case MMS_STRUCTURE:
+        case MMS_ARRAY: return "complex";
+        default: return "type_" + std::to_string(data.type);
+    }
+}*/
+
+static std::string ResultDataToString(const MmsClient::ResultData& data) {
+    if (!data.isValid) return data.errorReason;
+    switch (data.type) {
+        case MMS_FLOAT: return std::to_string(data.floatValue);
+        case MMS_INTEGER:
+        case MMS_UNSIGNED: return data.stringValue.empty() ? std::to_string(data.intValue) : data.stringValue;
+        case MMS_BOOLEAN: return data.boolValue ? "true" : "false";
+        case MMS_VISIBLE_STRING: return data.stringValue;
+        case MMS_UTC_TIME: return std::to_string(data.intValue); // Возвращаем миллисекунды как строку
         case MMS_OCTET_STRING: return data.stringValue;
         case MMS_BIT_STRING: return data.stringValue.empty() ? std::to_string(data.intValue) : data.stringValue;
         case MMS_STRUCTURE:
@@ -1525,84 +1942,8 @@ Napi::Value MmsClient::GetDataSetDirectory(const Napi::CallbackInfo& info) {
     }
 }
 
-Napi::Value MmsClient::ReadData(const Napi::CallbackInfo& info) {
-    Napi::Env env = info.Env();
-
-    if (info.Length() < 1) {
-        Napi::TypeError::New(env, "Expected dataRef or array of dataRefs").ThrowAsJavaScriptException();
-        return env.Undefined();
-    }
-
-    std::vector<std::string> dataRefs;
-    if (info[0].IsString()) {
-        dataRefs.push_back(info[0].As<Napi::String>().Utf8Value());
-    } else if (info[0].IsArray()) {
-        Napi::Array arr = info[0].As<Napi::Array>();
-        for (uint32_t i = 0; i < arr.Length(); ++i) {
-            if (arr.Get(i).IsString()) {
-                dataRefs.push_back(arr.Get(i).As<Napi::String>().Utf8Value());
-            }
-        }
-    } else {
-        Napi::TypeError::New(env, "Expected string or array").ThrowAsJavaScriptException();
-        return env.Undefined();
-    }
-
-    std::lock_guard<std::mutex> lock(connMutex_);
-    if (!connected_) {
-        Napi::Error::New(env, "Not connected").ThrowAsJavaScriptException();
-        return env.Null();
-    }
-
-    Napi::Array results = Napi::Array::New(env, dataRefs.size());
-
-    for (size_t i = 0; i < dataRefs.size(); ++i) {
-        const std::string& ref = dataRefs[i];
-
-        // Извлекаем имя атрибута после последней точки
-        size_t pos = ref.rfind('.');
-        std::string attrName = (pos != std::string::npos) ? ref.substr(pos + 1) : ref;
-
-        Napi::Object item = Napi::Object::New(env);
-        item.Set("dataRef", Napi::String::New(env, ref));
-
-        IedClientError error;
-        MmsValue* value = nullptr;
-
-        std::vector<FunctionalConstraint> fcs = {
-            IEC61850_FC_ST, IEC61850_FC_MX, IEC61850_FC_CO,
-            IEC61850_FC_CF, IEC61850_FC_DC, IEC61850_FC_SP,
-            IEC61850_FC_SG, IEC61850_FC_ALL
-        };
-
-        for (auto fc : fcs) {
-            value = IedConnection_readObject(connection_, &error, ref.c_str(), fc);
-            if (error == IED_ERROR_OK && value) break;
-            if (value) {
-                MmsValue_delete(value);
-                value = nullptr;
-            }
-        }
-
-        if (!value || error != IED_ERROR_OK) {          
-            item.Set("isValid", false);
-            item.Set("errorReason", Napi::String::New(env, "Read failed: error " + std::to_string(error)));
-            item.Set("value", env.Null());
-        } else {
-            ResultData resData = ConvertMmsValueToResultData(value, attrName);
-            item.Set("isValid", true);
-            item.Set("value", ResultDataToNapi(env, resData, attrName));  
-            MmsValue_delete(value);
-        }
-
-        results.Set(static_cast<uint32_t>(i), item);
-    }
-    return results;
-}
-
 /*Napi::Value MmsClient::ReadData(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
-
     if (info.Length() < 1) {
         Napi::TypeError::New(env, "Expected dataRef or array of dataRefs").ThrowAsJavaScriptException();
         return env.Undefined();
@@ -1630,91 +1971,385 @@ Napi::Value MmsClient::ReadData(const Napi::CallbackInfo& info) {
     }
 
     Napi::Array results = Napi::Array::New(env, dataRefs.size());
-
     for (size_t i = 0; i < dataRefs.size(); ++i) {
         const std::string& ref = dataRefs[i];
-
-        // Извлекаем имя атрибута после последней точки
-        size_t pos = ref.rfind('.');
-        std::string attrName = (pos != std::string::npos) ? ref.substr(pos + 1) : ref;
-
         Napi::Object item = Napi::Object::New(env);
         item.Set("dataRef", Napi::String::New(env, ref));
 
         IedClientError error;
         MmsValue* value = nullptr;
-
-        std::vector<FunctionalConstraint> fcs = {
-            IEC61850_FC_ST, IEC61850_FC_MX, IEC61850_FC_CO,
-            IEC61850_FC_CF, IEC61850_FC_DC, IEC61850_FC_SP,
-            IEC61850_FC_SG, IEC61850_FC_ALL
-        };
-
-        for (auto fc : fcs) {
-            value = IedConnection_readObject(connection_, &error, ref.c_str(), fc);
-            if (error == IED_ERROR_OK && value) break;
-            if (value) {
-                printf("DEBUG ReadData for %s:\n", ref.c_str());
-                printf("  MmsValue type: %d\n", MmsValue_getType(value));
-                
-                // Для битовых строк - дополнительная информация
-                if (MmsValue_getType(value) == MMS_BIT_STRING) {
-                    int size = MmsValue_getBitStringSize(value);
-                    printf("  BitString size: %d\n", size);
-                    
-                    // Получаем сырые байты
-                    uint8_t* buffer = MmsValue_getOctetStringBuffer(value);
-                    int byteCount = (size + 7) / 8;
-                    printf("  Raw bytes: ");
-                    for (int i = 0; i < byteCount; i++) {
-                        printf("%02X ", buffer[i]);
+        
+        // Для чтения структур типа Pos нам нужно читать с FC=ST
+        // Определяем, это ли структура [ST] без явного указания
+        std::string actualRef = ref;
+        FunctionalConstraint fc = IEC61850_FC_ST; // По умолчанию ST для структур
+        
+        // Проверяем, заканчивается ли ссылка на известные структуры
+        bool isLikelyStructure = false;
+        std::string refLower = ref;
+        std::transform(refLower.begin(), refLower.end(), refLower.begin(), ::tolower);
+        
+        if (refLower.find(".pos") != std::string::npos && 
+            refLower.find("[st]") == std::string::npos &&
+            refLower.find("[co]") == std::string::npos &&
+            refLower.find("[cf]") == std::string::npos) {
+            // Это похоже на структуру Pos, читаем как ST
+            isLikelyStructure = true;
+            fc = IEC61850_FC_ST;
+        }
+        else if (refLower.find(".mod") != std::string::npos &&
+                 refLower.find("[st]") == std::string::npos &&
+                 refLower.find("[co]") == std::string::npos &&
+                 refLower.find("[cf]") == std::string::npos) {
+            // Это похоже на структуру Mod, пробуем ST
+            isLikelyStructure = true;
+            fc = IEC61850_FC_ST;
+        }
+        else if (refLower.find(".beh") != std::string::npos &&
+                 refLower.find("[st]") == std::string::npos) {
+            // Это похоже на структуру Beh, пробуем ST
+            isLikelyStructure = true;
+            fc = IEC61850_FC_ST;
+        }
+        
+        // Пробуем прочитать с выбранным FC
+        value = IedConnection_readObject(connection_, &error, actualRef.c_str(), fc);
+        
+        // Если не получилось и это похоже на структуру, пробуем другие FC
+        if ((error != IED_ERROR_OK || !value) && isLikelyStructure) {
+            std::vector<FunctionalConstraint> fcs = {
+                IEC61850_FC_MX, IEC61850_FC_CO, IEC61850_FC_CF,
+                IEC61850_FC_DC, IEC61850_FC_SP, IEC61850_FC_SG,
+                IEC61850_FC_ALL
+            };
+            
+            for (auto tryFc : fcs) {
+                value = IedConnection_readObject(connection_, &error, actualRef.c_str(), tryFc);
+                if (error == IED_ERROR_OK && value) {
+                    int type = MmsValue_getType(value);
+                    if (type >= 0 && type <= 14) {
+                        fc = tryFc;
+                        break;
+                    } else {
+                        MmsValue_delete(value);
+                        value = nullptr;
+                        error = IED_ERROR_OBJECT_DOES_NOT_EXIST;
                     }
-                    printf("\n");
-                    
-                    // Проверяем разные способы чтения
-                    uint64_t bits1 = MmsValue_getBitStringAsInteger(value);
-                    printf("  getBitStringAsInteger(): %lu\n", bits1);
-                    
-                    // Альтернативное чтение
-                    uint64_t bits2 = 0;
-                    for (int i = 0; i < size; i++) {
-                        int byte_idx = i / 8;
-                        int bit_idx_in_byte = 7 - (i % 8); // MMS использует MSB first
-                        int bit = (buffer[byte_idx] >> bit_idx_in_byte) & 1;
-                        bits2 = (bits2 << 1) | bit;
+                }
+                if (value) {
+                    MmsValue_delete(value);
+                    value = nullptr;
+                }
+            }
+        }
+        
+        // Если все еще не получилось, пробуем стандартные FC
+        if (error != IED_ERROR_OK || !value) {
+            std::vector<FunctionalConstraint> fcs = {
+                IEC61850_FC_ST, IEC61850_FC_MX, IEC61850_FC_CO,
+                IEC61850_FC_CF, IEC61850_FC_DC, IEC61850_FC_SP,
+                IEC61850_FC_SG, IEC61850_FC_ALL
+            };
+            
+            for (auto tryFc : fcs) {
+                value = IedConnection_readObject(connection_, &error, actualRef.c_str(), tryFc);
+                if (error == IED_ERROR_OK && value) {
+                    int type = MmsValue_getType(value);
+                    if (type >= 0 && type <= 14) {
+                        break;
+                    } else {
+                        MmsValue_delete(value);
+                        value = nullptr;
+                        error = IED_ERROR_OBJECT_DOES_NOT_EXIST;
                     }
-                    printf("  Manual reading MSB-first: %lu\n", bits2);
-                    
-                    // LSB first вариант
-                    uint64_t bits3 = 0;
-                    for (int i = 0; i < size; i++) {
-                        int byte_idx = i / 8;
-                        int bit_idx_in_byte = i % 8; // LSB first
-                        int bit = (buffer[byte_idx] >> bit_idx_in_byte) & 1;
-                        bits3 |= (bit << i);
-                    }
-                    printf("  Manual reading LSB-first: %lu\n", bits3);
-                } 
+                }
+                if (value) {
+                    MmsValue_delete(value);
+                    value = nullptr;
+                }
             }
         }
 
-        
-
         if (!value || error != IED_ERROR_OK) {          
             item.Set("isValid", false);
-            item.Set("errorReason", Napi::String::New(env, "Read failed: error " + std::to_string(error)));
+            std::string errorReason;
+            switch (error) {
+                case IED_ERROR_OBJECT_DOES_NOT_EXIST:
+                    errorReason = "Object does not exist: " + ref;
+                    break;
+                case IED_ERROR_ACCESS_DENIED:
+                    errorReason = "Access denied: " + ref;
+                    break;
+                case IED_ERROR_TYPE_INCONSISTENT:
+                    errorReason = "Type inconsistent: " + ref;
+                    break;
+                case IED_ERROR_OBJECT_ACCESS_UNSUPPORTED:
+                    errorReason = "Object access unsupported: " + ref;
+                    break;
+                case IED_ERROR_CONNECTION_LOST:
+                    errorReason = "Connection lost";
+                    break;
+                case IED_ERROR_SERVICE_NOT_SUPPORTED:
+                    errorReason = "Service not supported: " + ref;
+                    break;
+                default:
+                    errorReason = "Read failed for " + ref + ": error " + std::to_string(error);
+                    break;
+            }
+            item.Set("errorReason", Napi::String::New(env, errorReason));
             item.Set("value", env.Null());
         } else {
+                        
+            std::string attrName = ref;
+            size_t lastDot = ref.rfind('.');
+            if (lastDot != std::string::npos) {
+                attrName = ref.substr(lastDot + 1);
+                
+                // Добавляем суффикс FC если его нет
+                std::string fcSuffix = DetermineFCSuffix(attrName);
+                if (!fcSuffix.empty() && 
+                    attrName.find('[') == std::string::npos &&
+                    attrName.find(']') == std::string::npos) {
+                    attrName += fcSuffix;
+                }
+            }
+
             ResultData resData = ConvertMmsValueToResultData(value, attrName);
-            item.Set("isValid", true);
-            item.Set("value", ResultDataToNapi(env, resData, attrName));  
+            item.Set("isValid", resData.isValid);
+            if (resData.isValid) {
+                item.Set("value", ResultDataToNapi(env, resData, attrName));
+            } else {
+                // Если ConvertMmsValueToResultData вернула ошибку, преобразуем ее
+                std::string errorMsg = resData.errorReason;
+                if (errorMsg.find("Unsupported MMS type") != std::string::npos) {
+                    errorMsg = "Invalid data type for " + ref;
+                }
+                item.Set("errorReason", Napi::String::New(env, errorMsg));
+                item.Set("value", env.Null());
+            }
             MmsValue_delete(value);
         }
 
         results.Set(static_cast<uint32_t>(i), item);
     }
+
     return results;
 }*/
+
+Napi::Value MmsClient::ReadData(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    if (info.Length() < 1) {
+        Napi::TypeError::New(env, "Expected dataRef or array of dataRefs").ThrowAsJavaScriptException();
+        return env.Undefined();
+    }
+
+    std::vector<std::string> dataRefs;
+    if (info[0].IsString()) {
+        dataRefs.push_back(info[0].As<Napi::String>().Utf8Value());
+    } else if (info[0].IsArray()) {
+        Napi::Array arr = info[0].As<Napi::Array>();
+        for (uint32_t i = 0; i < arr.Length(); ++i) {
+            if (arr.Get(i).IsString()) {
+                dataRefs.push_back(arr.Get(i).As<Napi::String>().Utf8Value());
+            }
+        }
+    } else {
+        Napi::TypeError::New(env, "Expected string or array").ThrowAsJavaScriptException();
+        return env.Undefined();
+    }
+
+    std::lock_guard<std::mutex> lock(connMutex_);
+    if (!connected_) {
+        Napi::Error::New(env, "Not connected").ThrowAsJavaScriptException();
+        return env.Null();
+    }
+
+    Napi::Array results = Napi::Array::New(env, dataRefs.size());
+    for (size_t i = 0; i < dataRefs.size(); ++i) {
+        const std::string& ref = dataRefs[i];
+        Napi::Object item = Napi::Object::New(env);
+        item.Set("dataRef", Napi::String::New(env, ref));
+
+        IedClientError error;
+        MmsValue* value = nullptr;
+        
+        // Обрабатываем ссылку с учетом [FC]
+        std::string actualRef = ref;
+        FunctionalConstraint fc = IEC61850_FC_ST; // По умолчанию ST
+        
+        // Извлекаем FC из ссылки если есть
+        size_t bracketPos = ref.find('[');
+        if (bracketPos != std::string::npos && ref.back() == ']') {
+            // Извлекаем FC из ссылки
+            std::string fcStr = ref.substr(bracketPos + 1, ref.length() - bracketPos - 2);
+            std::transform(fcStr.begin(), fcStr.end(), fcStr.begin(), ::tolower);
+            
+            if (fcStr == "st") fc = IEC61850_FC_ST;
+            else if (fcStr == "mx") fc = IEC61850_FC_MX;
+            else if (fcStr == "co") fc = IEC61850_FC_CO;
+            else if (fcStr == "cf") fc = IEC61850_FC_CF;
+            else if (fcStr == "dc") fc = IEC61850_FC_DC;
+            else if (fcStr == "sp") fc = IEC61850_FC_SP;
+            else if (fcStr == "sg") fc = IEC61850_FC_SG;
+            else if (fcStr == "br") fc = IEC61850_FC_BR;
+            else if (fcStr == "rp") fc = IEC61850_FC_RP;
+            else if (fcStr == "ex") fc = IEC61850_FC_EX;
+            else if (fcStr == "sr") fc = IEC61850_FC_SR;
+            else if (fcStr == "or") fc = IEC61850_FC_OR;
+            else if (fcStr == "bl") fc = IEC61850_FC_BL;
+            else if (fcStr == "lg") fc = IEC61850_FC_LG;
+            else if (fcStr == "go") fc = IEC61850_FC_GO;            
+            else if (fcStr == "ms") fc = IEC61850_FC_MS;
+            else if (fcStr == "us") fc = IEC61850_FC_US;
+            else if (fcStr == "all") fc = IEC61850_FC_ALL;
+            
+            // Убираем [FC] из ссылки для чтения
+            actualRef = ref.substr(0, bracketPos);
+        } else {
+            // Если нет явного FC, определяем по имени
+            std::string refLower = ref;
+            std::transform(refLower.begin(), refLower.end(), refLower.begin(), ::tolower);
+            
+            if (refLower.find(".pos") != std::string::npos ||
+                refLower.find(".mod") != std::string::npos ||
+                refLower.find(".beh") != std::string::npos ||
+                refLower.find(".health") != std::string::npos ||
+                refLower.find(".loc") != std::string::npos ||
+                refLower.find(".opcnt") != std::string::npos ||
+                refLower.find(".cbopcap") != std::string::npos ||
+                refLower.find(".proxy") != std::string::npos) {
+                fc = IEC61850_FC_ST;
+            }
+            else if (refLower.find(".ctlmodel") != std::string::npos ||
+                     refLower.find(".pos") != std::string::npos && refLower.find("cf") != std::string::npos) {
+                fc = IEC61850_FC_CF;
+            }
+            else if (refLower.find(".oper") != std::string::npos ||
+                     refLower.find(".sbow") != std::string::npos ||
+                     refLower.find(".cancel") != std::string::npos) {
+                fc = IEC61850_FC_CO;
+            }
+            else if (refLower.find(".namplt") != std::string::npos ||
+                     refLower.find(".phynam") != std::string::npos) {
+                fc = IEC61850_FC_DC;
+            }
+            else if (refLower.find(".stval") != std::string::npos ||
+                     refLower.find(".ind") != std::string::npos ||
+                     refLower.find(".gralm") != std::string::npos) {
+                // Для атрибутов .stVal читаем как ST
+                fc = IEC61850_FC_ST;
+            }
+        }
+        
+        // Пробуем прочитать с определенным FC
+        value = IedConnection_readObject(connection_, &error, actualRef.c_str(), fc);
+        
+        // Если не получилось, пробуем другие FC
+        if (error != IED_ERROR_OK || !value) {
+            std::vector<FunctionalConstraint> fcs = {
+                IEC61850_FC_ST, IEC61850_FC_MX, IEC61850_FC_CO,
+                IEC61850_FC_CF, IEC61850_FC_DC, IEC61850_FC_SP,
+                IEC61850_FC_SG, IEC61850_FC_ALL
+            };
+            
+            for (auto tryFc : fcs) {
+                value = IedConnection_readObject(connection_, &error, actualRef.c_str(), tryFc);
+                if (error == IED_ERROR_OK && value) {
+                    int type = MmsValue_getType(value);
+                    if (type >= 0 && type <= 14) {
+                        fc = tryFc;
+                        break;
+                    } else {
+                        MmsValue_delete(value);
+                        value = nullptr;
+                        error = IED_ERROR_OBJECT_DOES_NOT_EXIST;
+                    }
+                }
+                if (value) {
+                    MmsValue_delete(value);
+                    value = nullptr;
+                }
+            }
+        }
+
+        if (!value || error != IED_ERROR_OK) {          
+            item.Set("isValid", false);
+            std::string errorReason;
+            switch (error) {
+                case IED_ERROR_OBJECT_DOES_NOT_EXIST:
+                    errorReason = "Object does not exist: " + ref;
+                    break;
+                case IED_ERROR_ACCESS_DENIED:
+                    errorReason = "Access denied: " + ref;
+                    break;
+                case IED_ERROR_TYPE_INCONSISTENT:
+                    errorReason = "Type inconsistent: " + ref;
+                    break;
+                case IED_ERROR_OBJECT_ACCESS_UNSUPPORTED:
+                    errorReason = "Object access unsupported: " + ref;
+                    break;
+                default:
+                    errorReason = "Read failed for " + ref + ": error " + std::to_string(error);
+                    break;
+            }
+            item.Set("errorReason", Napi::String::New(env, errorReason));
+            item.Set("value", env.Null());
+        } else {
+            // Формируем имя атрибута для ConvertMmsValueToResultData
+            std::string attrName;
+            size_t lastDot = actualRef.rfind('.');
+            if (lastDot != std::string::npos) {
+                attrName = actualRef.substr(lastDot + 1);
+            } else {
+                attrName = actualRef;
+            }
+            
+            // Добавляем FC к имени атрибута если его не было в оригинальной ссылке
+            if (ref.find('[') == std::string::npos) {
+                // Определяем суффикс FC для имени атрибута
+                std::string fcSuffix;
+                switch (fc) {
+                    case IEC61850_FC_ST: fcSuffix = "[ST]"; break;
+                    case IEC61850_FC_CO: fcSuffix = "[CO]"; break;
+                    case IEC61850_FC_CF: fcSuffix = "[CF]"; break;
+                    case IEC61850_FC_DC: fcSuffix = "[DC]"; break;
+                    case IEC61850_FC_MX: fcSuffix = "[MX]"; break;
+                    case IEC61850_FC_EX: fcSuffix = "[EX]"; break;
+                    default: fcSuffix = ""; break;
+                }
+                
+                if (!fcSuffix.empty()) {
+                    attrName += fcSuffix;
+                }
+            } else {
+                // Если в оригинальной ссылке был FC, используем его
+                size_t bracketPos = ref.find('[');
+                if (bracketPos != std::string::npos) {
+                    attrName = ref.substr(bracketPos - attrName.length());
+                }
+            }
+            
+            ResultData resData = ConvertMmsValueToResultData(value, attrName);
+            item.Set("isValid", resData.isValid);
+            if (resData.isValid) {
+                item.Set("value", ResultDataToNapi(env, resData, attrName));
+            } else {
+                // Улучшаем сообщение об ошибке
+                std::string errorMsg = resData.errorReason;
+                if (errorMsg == "Unsupported MMS type") {
+                    errorMsg = "Invalid data format for " + ref;
+                }
+                item.Set("errorReason", Napi::String::New(env, errorMsg));
+                item.Set("value", env.Null());
+            }
+            MmsValue_delete(value);
+        }
+
+        results.Set(static_cast<uint32_t>(i), item);
+    }
+
+    return results;
+}
 
 Napi::Value MmsClient::ControlObject(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
@@ -2388,7 +3023,7 @@ Napi::Value MmsClient::GetStatus(const Napi::CallbackInfo& info) {
     return status;
 }
 
-void MmsClient::ReportCallback(void* parameter, ClientReport report) {
+/*void MmsClient::ReportCallback(void* parameter, ClientReport report) {
     MmsClient* client = static_cast<MmsClient*>(parameter);
 
     const char* rcbRefRaw = ClientReport_getRcbReference(report);
@@ -2444,6 +3079,7 @@ void MmsClient::ReportCallback(void* parameter, ClientReport report) {
     // Собираем данные для передачи в основной поток
     bool hasTimestamp = ClientReport_hasTimestamp(report);
     uint64_t timestamp = 0;
+    
     if (hasTimestamp) {
         timestamp = ClientReport_getTimestamp(report);
         printf("Report has timestamp: %llu\n", (unsigned long long)timestamp);
@@ -2533,6 +3169,179 @@ void MmsClient::ReportCallback(void* parameter, ClientReport report) {
                 printf("  Added to report: %s -> %s\n", 
                        item.fullRef.c_str(), 
                        jsValue.IsString() ? jsValue.As<Napi::String>().Utf8Value().c_str() : "[object]");
+            }
+            
+            eventObj.Set("values", valuesObj);
+            eventObj.Set("reasons", reasonsObj);
+
+            // Отправляем событие
+            cb.Call({Napi::String::New(env, "data"), eventObj});
+            printf("Report event sent to JS successfully for RCB: %s\n", rcbRef.c_str());
+        } catch (const Napi::Error& e) {
+            printf("ERROR in NonBlockingCall: %s\n", e.Message().c_str());
+        } catch (const std::exception& e) {
+            printf("ERROR in NonBlockingCall (std): %s\n", e.what());
+        } catch (...) {
+            printf("ERROR in NonBlockingCall: unknown exception\n");
+        }
+    });
+    
+    printf("=== ReportCallback END ===\n");
+}*/
+
+void MmsClient::ReportCallback(void* parameter, ClientReport report) {
+    MmsClient* client = static_cast<MmsClient*>(parameter);
+
+    const char* rcbRefRaw = ClientReport_getRcbReference(report);
+    const char* rptIdRaw = ClientReport_getRptId(report);
+    std::string rcbRef = rcbRefRaw ? rcbRefRaw : "unknown";
+    std::string rptId = rptIdRaw ? rptIdRaw : "unknown";
+
+    printf("=== ReportCallback START ===\n");
+    printf("Report for RCB: %s, rptId: %s\n", rcbRef.c_str(), rptId.c_str());
+
+    auto it = client->activeReports_.find(rcbRef);
+    if (it == client->activeReports_.end()) {
+        printf("ERROR: No active report found for %s\n", rcbRef.c_str());
+        printf("=== ReportCallback END ===\n");
+        return;
+    }
+
+    printf("Found active report for %s\n", rcbRef.c_str());
+
+    LinkedList dataSetDirectory = it->second.dataSetDirectory;
+    MmsValue* dataSetValues = ClientReport_getDataSetValues(report);
+
+    if (!dataSetValues) {
+        printf("ERROR: dataSetValues is NULL\n");
+        printf("=== ReportCallback END ===\n");
+        return;
+    }
+
+    int dataSetType = MmsValue_getType(dataSetValues);
+    int dataSetSize = MmsValue_getArraySize(dataSetValues);
+    printf("dataSetValues: type=%d, array size=%d\n", dataSetType, dataSetSize);
+
+    // Подсчитываем количество элементов в директории
+    int dirCount = 0;
+    std::vector<std::string> memberRefs;
+    if (dataSetDirectory) {
+        LinkedList entry = dataSetDirectory;
+        while (entry) {
+            if (entry->data) {
+                dirCount++;
+                memberRefs.push_back((char*)entry->data);
+            }
+            entry = LinkedList_getNext(entry);
+        }
+    }
+    printf("DataSet directory count: %d\n", dirCount);
+
+    // Проверяем, что размеры совпадают
+    if (dirCount != dataSetSize) {
+        printf("WARNING: Directory count (%d) != DataSet size (%d)\n", dirCount, dataSetSize);
+    }
+
+    // Собираем данные для передачи в основной поток
+    bool hasTimestamp = ClientReport_hasTimestamp(report);
+    uint64_t timestamp = 0;
+    
+    if (hasTimestamp) {
+        timestamp = ClientReport_getTimestamp(report);
+        printf("Report has timestamp: %llu ms\n", (unsigned long long)timestamp);
+    }
+
+    printf("Processing report data...\n");
+    
+    // Создаем вектор для хранения данных, которые будут переданы в основной поток
+    struct ReportItemData {
+        std::string fullRef;
+        std::string attrName;
+        ResultData resultData;
+        int reason;
+    };
+    
+    std::vector<ReportItemData> reportItems;
+    
+    // Обрабатываем данные отчета
+    for (int i = 0; i < std::min(dirCount, dataSetSize); i++) {
+        ReasonForInclusion reason = ClientReport_getReasonForInclusion(report, i);
+        
+        if (reason == IEC61850_REASON_NOT_INCLUDED) {
+            // Значение не включено в отчет
+            continue;
+        }
+        
+        std::string fullRef = memberRefs[i];
+        
+        // Извлекаем имя атрибута (убираем [FC] если есть)
+        size_t dotPos = fullRef.rfind('.');
+        std::string attrName = (dotPos != std::string::npos) ? 
+                               fullRef.substr(dotPos + 1) : fullRef;
+        
+        MmsValue* value = MmsValue_getElement(dataSetValues, i);
+        if (!value) {
+            printf("  [%d] %s: MmsValue is NULL\n", i, fullRef.c_str());
+            continue;
+        }
+        
+        // Используем ConvertMmsValueToResultData для преобразования
+        ResultData rd = ConvertMmsValueToResultData(value, attrName);
+        
+        ReportItemData item;
+        item.fullRef = fullRef;
+        item.attrName = attrName;
+        item.resultData = rd;
+        item.reason = reason;
+        
+        reportItems.push_back(item);
+        
+        printf("  [%d] %s: Processed, type=%d, reason=%d\n", 
+               i, fullRef.c_str(), rd.type, reason);
+    }
+
+    printf("Sending report event to JS...\n");
+    
+    // Передаем данные в основной поток через TSFN
+    client->tsfn_.NonBlockingCall([client, rcbRef, rptId, timestamp, hasTimestamp, reportItems](Napi::Env env, Napi::Function cb) {
+        try {
+            printf("Processing report in JS thread for RCB: %s\n", rcbRef.c_str());
+            
+            Napi::Object eventObj = Napi::Object::New(env);
+            eventObj.Set("clientID", Napi::String::New(env, client->clientID_.c_str()));
+            eventObj.Set("type", "data");
+            eventObj.Set("event", "report");
+            eventObj.Set("rcbRef", Napi::String::New(env, rcbRef));
+            eventObj.Set("rptId", Napi::String::New(env, rptId));
+            
+            // Передаем timestamp как число (миллисекунды)
+            if (hasTimestamp) {
+                eventObj.Set("timestamp", Napi::Number::New(env, static_cast<double>(timestamp)));
+            }
+            
+            // Создаем объект значений и причин
+            Napi::Object valuesObj = Napi::Object::New(env);
+            Napi::Object reasonsObj = Napi::Object::New(env);
+            
+            for (const auto& item : reportItems) {
+                // Используем ResultDataToNapi для преобразования
+                Napi::Value jsValue = ResultDataToNapi(env, item.resultData, item.attrName);
+                valuesObj.Set(item.fullRef, jsValue);
+                reasonsObj.Set(item.fullRef, item.reason);
+                
+                // Отладочный вывод
+                if (jsValue.IsNumber()) {
+                    printf("  Added to report: %s -> %f\n", 
+                           item.fullRef.c_str(), jsValue.As<Napi::Number>().DoubleValue());
+                } else if (jsValue.IsString()) {
+                    printf("  Added to report: %s -> '%s'\n", 
+                           item.fullRef.c_str(), jsValue.As<Napi::String>().Utf8Value().c_str());
+                } else if (jsValue.IsBoolean()) {
+                    printf("  Added to report: %s -> %s\n", 
+                           item.fullRef.c_str(), jsValue.As<Napi::Boolean>().Value() ? "true" : "false");
+                } else {
+                    printf("  Added to report: %s -> [object]\n", item.fullRef.c_str());
+                }
             }
             
             eventObj.Set("values", valuesObj);

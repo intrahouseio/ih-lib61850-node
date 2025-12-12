@@ -134,9 +134,9 @@ async function handleConnectionOpened() {
         // Пакетное чтение отдельных значений
         console.log('Reading data...');
         const dataRefs = [
-            'WAGO61850ServerDevice/XCBR1.Pos.stVal',
+            'WAGO61850ServerDevice/XCBR1.Pos[ST]',
             'WAGO61850ServerDevice/GGIO1.Ind.stVal',
-            'WAGO61850ServerDevice/CALH1.GrAlm.stVal'
+            'WAGO61850ServerDevice/CALH12.GrAlm.stVal'
         ];
         const readRefResult = await client.readData(dataRefs); 
         console.log("readRefResult " + util.inspect(readRefResult));
