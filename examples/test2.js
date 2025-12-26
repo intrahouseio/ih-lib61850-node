@@ -99,6 +99,9 @@ async function handleConnectionOpened() {
             });
         });
 
+        //для теста
+        const dataModel2 = await client.TestDebug();
+
         console.log('\nЧтение значений DataSet...');
         const datasetRefs = dataSets.map(ds => ds.reference);
         console.log('Calling readDataSetValues...');
