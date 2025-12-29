@@ -33,18 +33,8 @@ public:
     ~MmsClient(); 
     std::recursive_mutex& GetMutex() { return connMutex_; }   
 
-    // Struct for holding MMS value data
-    /*struct ResultData {
-        MmsType type;
-        float floatValue;
-        int64_t intValue;  
-        bool boolValue;
-        std::string stringValue;
-        std::vector<ResultData> structureElements;
-        std::vector<ResultData> arrayElements;
-        bool isValid;
-        std::string errorReason;
-    };*/
+    // флаг для управления соединением
+    bool connectionClosingIntentionally_ = false;
 
     struct ResultData {
     MmsType type;
@@ -88,7 +78,7 @@ private:
     Napi::Value GetLogicalDevices(const Napi::CallbackInfo& info);
     static void ConnectionHandler(void* parameter, IedConnection connection, IedConnectionState state);
     static void ConnectionIndicationHandler(void* parameter, IedConnection connection, IedConnectionState newState);    
-    static ResultData ConvertMmsValueToResultData(MmsValue* val, const std::string& attrName, IedConnection connection = nullptr, const std::string& parentRef = "", FunctionalConstraint fc = IEC61850_FC_ST);
+    //static ResultData ConvertMmsValueToResultData(MmsValue* val, const std::string& attrName, IedConnection connection = nullptr, const std::string& parentRef = "", FunctionalConstraint fc = IEC61850_FC_ST);
     Napi::Value ControlObject(const Napi::CallbackInfo& info);
     Napi::Value ReadDataSetValues(const Napi::CallbackInfo& info);
     Napi::Value CreateDataSet(const Napi::CallbackInfo& info);

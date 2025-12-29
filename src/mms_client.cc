@@ -669,6 +669,7 @@ MmsClient::MmsClient(const Napi::CallbackInfo& info) : Napi::ObjectWrap<MmsClien
     usingPrimaryIp_ = true;
     isClosing_ = false;
     
+    
     try {
         tsfn_ = Napi::ThreadSafeFunction::New(
             info.Env(),
@@ -3448,8 +3449,6 @@ static Napi::Value ResultDataToNapiWithCache(Napi::Env env,
             return Napi::String::New(env, "type_" + std::to_string(data.type));
     }
 }
-
-
 
 void MmsClient::ReportCallback(void* parameter, ClientReport report) {
     MmsClient* client = static_cast<MmsClient*>(parameter);
