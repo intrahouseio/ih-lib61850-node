@@ -38,6 +38,7 @@ const client = new MmsClient((event, data) => {
                     console.log(` ${ref}: ${util.inspect(value, { depth: null })}, Reason: ${reason}`);
                 }
             });
+            
         } else if (data.event === 'batchData') {
             console.log(`Batch Data received for ${util.inspect(data.dataRefs, { depth: null })}:`);
             data.values.forEach((result, index) => {
@@ -155,11 +156,6 @@ async function handleConnectionOpened() {
         const readRefResult = await client.readData(dataRefs); 
         console.log("readRefResult " + util.inspect(readRefResult, { depth: null }));
 
-        /*const rcbRef = 'WAGO61850ServerDevice/LLN0.RP.ReportBlock0101';
-        const dataSetRef = 'WAGO61850ServerDevice/LLN0.DataSet01';
-        console.log(`Enabling reporting for ${rcbRef} with dataset ${dataSetRef}`);
-        await client.enableReporting(rcbRef, dataSetRef);*/
-
         const rcbRef2 = 'WAGO61850ServerDevice/LLN0.RP.ReportBlock0201';
         const dataSetRef2 = 'WAGO61850ServerDevice/LLN0.DataSet02';
         console.log(`Enabling reporting for ${rcbRef2} with dataset ${dataSetRef2}`);
@@ -193,18 +189,19 @@ async function main() {
     try {
         console.log('Starting client...');
         await client.connect({
-            ip: '192.168.0.142',
+            ip: '192.168.0.106',
             port: 102,
             clientID: 'mms_client1',
-            reconnectDelay: 2
+            reconnectDelay: 2,
+            //heartbeatInterval: 3000 //новый параметр - интервал эхо-запросов для поддержки соединения
         });
 
         await sleep(5000);
 
         console.log('Waiting for data and reports...');
-        await sleep(15000);
+        await sleep(30000);
 
-        /*const rcbRef = 'WAGO61850ServerDevice/LLN0.RP.ReportBlock0101';
+        /*const rcbRef = 'A01LD0/LLN0.RP.repTI1';
         console.log(`Disabling reporting for ${rcbRef}`);
         await client.disableReporting(rcbRef);*/
 

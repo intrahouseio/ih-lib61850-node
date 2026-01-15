@@ -2,13 +2,13 @@
 #define MMS_CLIENT_H
 
 #include <napi.h>
-//#include "hal_thread.h"
-//#include "hal_time.h"
 #include <mutex>
 #include <thread>
 #include <atomic>
 #include <vector>
 #include <map>
+#include <unordered_map>
+#include <chrono>
 #include <iec61850_client.h>
 
 // Структура для хранения информации о именах элементов структуры
@@ -36,26 +36,77 @@ public:
     // флаг для управления соединением
     bool connectionClosingIntentionally_ = false;
 
+    struct ReportInfo {
+        ClientReportControlBlock rcb = nullptr;
+        ClientDataSet dataSet = nullptr;
+        std::vector<std::string> dataSetMembers;
+        std::string rcbRef;
+        std::string datasetRef;
+                
+        // Добавляем кэш имен элементов для этого DataSet
+        std::unordered_map<std::string, std::vector<std::string>> structureElementNamesCache;
+
+        // Диагностика
+        size_t lastReportSize = 0;
+        std::chrono::steady_clock::time_point lastReportTime;
+        int reportsReceived = 0;
+        
+        // Конструктор по умолчанию
+        ReportInfo() = default;
+        
+        // Конструктор копирования (исправлен порядок инициализации)
+        ReportInfo(const ReportInfo& other) 
+            : dataSetMembers(other.dataSetMembers),
+              rcbRef(other.rcbRef),
+              datasetRef(other.datasetRef),
+              structureElementNamesCache(other.structureElementNamesCache),
+              lastReportSize(other.lastReportSize),
+              lastReportTime(other.lastReportTime),
+              reportsReceived(other.reportsReceived) {
+            // Указатели не копируем - они специфичны для каждого соединения
+        }
+        
+        // Оператор присваивания
+        ReportInfo& operator=(const ReportInfo& other) {
+            if (this != &other) {
+                rcbRef = other.rcbRef;
+                datasetRef = other.datasetRef;
+                dataSetMembers = other.dataSetMembers;
+                structureElementNamesCache = other.structureElementNamesCache;
+                lastReportSize = other.lastReportSize;
+                lastReportTime = other.lastReportTime;
+                reportsReceived = other.reportsReceived;
+                // Указатели не копируем
+            }
+            return *this;
+        }
+        
+        // Деструктор
+        ~ReportInfo() {
+            // Ресурсы освобождаются отдельно
+        }
+    };
+
     struct ResultData {
-    MmsType type;
-    bool isValid;
-    std::string errorReason;
-    
-    // Для простых типов
-    double floatValue;
-    int64_t intValue;
-    bool boolValue;
-    std::string stringValue;
-    
-    // Для сложных типов
-    std::vector<ResultData> structureElements;
-    std::vector<ResultData> arrayElements;
+        MmsType type;
+        bool isValid;
+        std::string errorReason;
+        
+        // Для простых типов
+        double floatValue;
+        int64_t intValue;
+        bool boolValue;
+        std::string stringValue;
+        
+        // Для сложных типов
+        std::vector<ResultData> structureElements;        
+        std::vector<ResultData> arrayElements;
 
-    // Хранит имена элементов структуры
-    std::vector<std::string> structureElementNames;
-};
+        // Хранит имена элементов структуры
+        std::vector<std::string> structureElementNames;
+    };
 
-        // Методы для работы с кэшем
+    // Методы для работы с кэшем
     void CacheDataSetStructure(const std::string& datasetRef, 
                               const std::vector<std::string>& memberRefs);
     bool GetCachedElementNames(const std::string& ref, FunctionalConstraint fc,
@@ -65,9 +116,14 @@ public:
                                const std::vector<MmsType>& elementTypes);
 
 private:
+    // Диагностические счетчики
+    static std::atomic<int> totalReportsProcessed_;
+    static std::atomic<int> totalElementsProcessed_;
+    static std::atomic<int> maxReportSize_;
+
     static Napi::FunctionReference constructor;
-    std::atomic<bool> isClosing_{false};
-    void checkConnectionStatus();    
+    bool isClosing_; 
+    void CheckConnectionHealth();    
     std::atomic<bool> connectionCheckActive_{false};
     std::atomic<bool> disconnectEventSent_{false};
 
@@ -78,7 +134,6 @@ private:
     Napi::Value GetLogicalDevices(const Napi::CallbackInfo& info);
     static void ConnectionHandler(void* parameter, IedConnection connection, IedConnectionState state);
     static void ConnectionIndicationHandler(void* parameter, IedConnection connection, IedConnectionState newState);    
-    //static ResultData ConvertMmsValueToResultData(MmsValue* val, const std::string& attrName, IedConnection connection = nullptr, const std::string& parentRef = "", FunctionalConstraint fc = IEC61850_FC_ST);
     Napi::Value ControlObject(const Napi::CallbackInfo& info);
     Napi::Value ReadDataSetValues(const Napi::CallbackInfo& info);
     Napi::Value CreateDataSet(const Napi::CallbackInfo& info);
@@ -91,39 +146,19 @@ private:
 
     static void ReportCallback(void* parameter, ClientReport report);
 
-     // Кэш для имен элементов структур
+    // Кэш для имен элементов структур
     std::unordered_map<std::string, DataSetCache> datasetCache_;
     
-    // Методы для работы с кэшем
-    //void CacheDataSetStructure(const std::string& datasetRef, 
-    //                          const std::vector<std::string>& memberRefs);
-    //bool GetCachedElementNames(const std::string& ref, FunctionalConstraint fc,
-    //                          std::vector<std::string>& elementNames);
-    //void CacheStructureElements(const std::string& ref, FunctionalConstraint fc,
-    //                           const std::vector<std::string>& elementNames,
-    //                           const std::vector<MmsType>& elementTypes);
-   
-    
-
-
-    struct ReportInfo {
-        ClientReportControlBlock rcb;
-        ClientDataSet dataSet;
-        LinkedList dataSetDirectory;
-        std::string rcbRef;
-        std::string datasetRef;  
-    };
     std::map<std::string, ReportInfo> activeReports_;
 
     IedConnection connection_;
     std::thread thread_;
-    //std::mutex connMutex_;
     std::recursive_mutex connMutex_;
     Napi::ThreadSafeFunction tsfn_;
     bool running_;
     bool connected_;
     std::string clientID_;
     bool usingPrimaryIp_;    
-    };
+};
 
 #endif
