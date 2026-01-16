@@ -10,7 +10,7 @@
 #include <cinttypes>
 #include <cstdint>
 #include <atomic>
-#include <sys/resource.h>
+//#include <sys/resource.h>
 
 // Инициализация статических переменных класса MmsClient
 std::atomic<int> MmsClient::totalReportsProcessed_(0);
