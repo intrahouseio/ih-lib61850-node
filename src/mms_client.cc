@@ -2112,17 +2112,6 @@ Napi::Value MmsClient::ReadDataSetValues(const Napi::CallbackInfo& info) {
         printf("=== Finished DataSet: %s ===\n\n", datasetRef.c_str());
     }
 
-    tsfn_.NonBlockingCall([this, count = datasetRefs.size()](Napi::Env env, Napi::Function cb) {
-        try {
-            Napi::Object o = Napi::Object::New(env);
-            o.Set("clientID", Napi::String::New(env, clientID_));
-            o.Set("type", "data");
-            o.Set("event", count == 1 ? "dataSetRead" : "multipleDataSetsRead");
-            o.Set("count", static_cast<int>(count));
-            cb.Call({ Napi::String::New(env, "data"), o });
-        } catch (...) {}
-    });
-
     return results;
 }
 
@@ -2282,18 +2271,7 @@ Napi::Value MmsClient::CreateDataSet(const Napi::CallbackInfo& info) {
             });
             return env.Undefined();
         }
-        tsfn_.NonBlockingCall([this, datasetRef](Napi::Env env, Napi::Function jsCallback) {
-            try {
-                Napi::Object eventObj = Napi::Object::New(env);
-                eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
-                eventObj.Set("type", Napi::String::New(env, "control"));
-                eventObj.Set("event", Napi::String::New(env, "dataSetCreated"));
-                eventObj.Set("datasetRef", Napi::String::New(env, datasetRef));
-                jsCallback.Call({Napi::String::New(env, "data"), eventObj});
-            } catch (const Napi::Error& e) {
-                printf("N-API Callback Error in CreateDataSet: %s, clientID: %s\n", e.Message().c_str(), clientID_.c_str());
-            }
-        });
+         
         return env.Undefined();
     } catch (const std::exception& e) {
         printf("Exception in CreateDataSet: %s, clientID: %s\n", e.what(), clientID_.c_str());
@@ -2345,18 +2323,7 @@ Napi::Value MmsClient::DeleteDataSet(const Napi::CallbackInfo& info) {
             });
             return env.Undefined();
         }
-        tsfn_.NonBlockingCall([this, datasetRef](Napi::Env env, Napi::Function jsCallback) {
-            try {
-                Napi::Object eventObj = Napi::Object::New(env);
-                eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
-                eventObj.Set("type", Napi::String::New(env, "control"));
-                eventObj.Set("event", Napi::String::New(env, "dataSetDeleted"));
-                eventObj.Set("datasetRef", Napi::String::New(env, datasetRef));
-                jsCallback.Call({Napi::String::New(env, "data"), eventObj});
-            } catch (const Napi::Error& e) {
-                printf("N-API Callback Error in DeleteDataSet: %s, clientID: %s\n", e.Message().c_str(), clientID_.c_str());
-            }
-        });
+        
         return env.Undefined();
     } catch (const std::exception& e) {
         printf("Exception in DeleteDataSet: %s, clientID: %s\n", e.what(), clientID_.c_str());
@@ -2432,25 +2399,26 @@ Napi::Value MmsClient::GetDataSetDirectory(const Napi::CallbackInfo& info) {
         }
         LinkedList_destroy(dataSetList);
 
-        tsfn_.NonBlockingCall([this, logicalNodeRef, dataSets](Napi::Env env, Napi::Function jsCallback) {
-            try {
-                Napi::Object eventObj = Napi::Object::New(env);
-                eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
-                eventObj.Set("type", Napi::String::New(env, "data"));
-                eventObj.Set("event", Napi::String::New(env, "dataSetDirectory"));
-                eventObj.Set("logicalNodeRef", Napi::String::New(env, logicalNodeRef));
-
-                Napi::Array dataSetArray = Napi::Array::New(env, dataSets.size());
-                for (size_t i = 0; i < dataSets.size(); ++i) {
-                    dataSetArray.Set(uint32_t(i), Napi::String::New(env, dataSets[i]));
-                }
-                eventObj.Set("dataSets", dataSetArray);
-
-                jsCallback.Call({Napi::String::New(env, "data"), eventObj});
-            } catch (const Napi::Error& e) {
-                printf("N-API Callback Error in GetDataSetDirectory: %s, clientID: %s\n", e.Message().c_str(), clientID_.c_str());
-            }
-        });
+        // УДАЛЕНО: отправка события dataSetDirectory
+        // tsfn_.NonBlockingCall([this, logicalNodeRef, dataSets](Napi::Env env, Napi::Function jsCallback) {
+        //     try {
+        //         Napi::Object eventObj = Napi::Object::New(env);
+        //         eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
+        //         eventObj.Set("type", Napi::String::New(env, "data"));
+        //         eventObj.Set("event", Napi::String::New(env, "dataSetDirectory"));
+        //         eventObj.Set("logicalNodeRef", Napi::String::New(env, logicalNodeRef));
+        // 
+        //         Napi::Array dataSetArray = Napi::Array::New(env, dataSets.size());
+        //         for (size_t i = 0; i < dataSets.size(); ++i) {
+        //             dataSetArray.Set(uint32_t(i), Napi::String::New(env, dataSets[i]));
+        //         }
+        //         eventObj.Set("dataSets", dataSetArray);
+        // 
+        //         jsCallback.Call({Napi::String::New(env, "data"), eventObj});
+        //     } catch (const Napi::Error& e) {
+        //         printf("N-API Callback Error in GetDataSetDirectory: %s, clientID: %s\n", e.Message().c_str(), clientID_.c_str());
+        //     }
+        // });
 
         Napi::Array resultArray = Napi::Array::New(env, dataSets.size());
         for (size_t i = 0; i < dataSets.size(); ++i) {
@@ -3018,18 +2986,7 @@ Napi::Value MmsClient::GetLogicalDevices(const Napi::CallbackInfo& info) {
         LinkedList deviceList = IedConnection_getLogicalDeviceList(connection_, &error);
         if (error != IED_ERROR_OK || deviceList == nullptr) {
             printf("Failed to get logical device list, error: %d, clientID: %s\n", error, clientID_.c_str());
-            tsfn_.NonBlockingCall([this](Napi::Env env, Napi::Function jsCallback) {
-                try {
-                    Napi::Object eventObj = Napi::Object::New(env);
-                    eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
-                    eventObj.Set("type", Napi::String::New(env, "error"));
-                    eventObj.Set("reason", Napi::String::New(env, "Failed to get logical device list"));
-                    std::vector<napi_value> args = {Napi::String::New(env, "data"), eventObj};
-                    jsCallback.Call(args);
-                } catch (const Napi::Error& e) {
-                    printf("N-API Callback Error in GetLogicalDevices: %s, clientID: %s\n", e.Message().c_str(), clientID_.c_str());
-                }
-            });
+                        
             deferred.Reject(Napi::Error::New(env, "Failed to get logical device list").Value());
             return deferred.Promise();
         }
@@ -3106,71 +3063,11 @@ Napi::Value MmsClient::GetLogicalDevices(const Napi::CallbackInfo& info) {
         LinkedList_destroy(deviceList);
         if (logicalDevices.empty()) {
             printf("No valid logical devices found, clientID: %s\n", clientID_.c_str());
-            tsfn_.NonBlockingCall([this](Napi::Env env, Napi::Function jsCallback) {
-                try {
-                    Napi::Object eventObj = Napi::Object::New(env);
-                    eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
-                    eventObj.Set("type", Napi::String::New(env, "error"));
-                    eventObj.Set("reason", Napi::String::New(env, "No valid logical devices found"));
-                    std::vector<napi_value> args = {Napi::String::New(env, "data"), eventObj};
-                    jsCallback.Call(args);
-                } catch (const Napi::Error& e) {
-                    printf("N-API Callback Error in GetLogicalDevices: %s, clientID: %s\n", e.Message().c_str(), clientID_.c_str());
-                }
-            });
+                        
             deferred.Reject(Napi::Error::New(env, "No valid logical devices found").Value());
             return deferred.Promise();
-        }
-        tsfn_.NonBlockingCall([this, logicalDevices](Napi::Env env, Napi::Function jsCallback) {
-            try {
-                Napi::Object eventObj = Napi::Object::New(env);
-                eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
-                eventObj.Set("type", Napi::String::New(env, "data"));
-                eventObj.Set("event", Napi::String::New(env, "logicalDevices"));
-                auto toNapiObject = [](Napi::Env env, const auto& obj, auto toNapiFunc) -> Napi::Value {
-                    Napi::Object napiObj = Napi::Object::New(env);
-                    napiObj.Set("name", Napi::String::New(env, obj.name));
-                    if constexpr (std::is_same_v<std::decay_t<decltype(obj)>, DataAttribute>) {
-                        napiObj.Set("type", Napi::Number::New(env, obj.type));
-                        napiObj.Set("value", Napi::String::New(env, obj.value));
-                        napiObj.Set("isValid", Napi::Boolean::New(env, obj.isValid));
-                    } else if constexpr (std::is_same_v<std::decay_t<decltype(obj)>, DataObject>) {
-                        Napi::Array attrs = Napi::Array::New(env, obj.attributes.size());
-                        for (size_t i = 0; i < obj.attributes.size(); i++) {
-                            attrs.Set(uint32_t(i), toNapiFunc(env, obj.attributes[i], toNapiFunc));
-                        }
-                        napiObj.Set("attributes", attrs);
-                        Napi::Array subObjs = Napi::Array::New(env, obj.subObjects.size());
-                        for (size_t i = 0; i < obj.subObjects.size(); i++) {
-                            subObjs.Set(uint32_t(i), toNapiFunc(env, obj.subObjects[i], toNapiFunc));
-                        }
-                        napiObj.Set("subObjects", subObjs);
-                    } else if constexpr (std::is_same_v<std::decay_t<decltype(obj)>, LogicalNode>) {
-                        Napi::Array dataObjs = Napi::Array::New(env, obj.dataObjects.size());
-                        for (size_t i = 0; i < obj.dataObjects.size(); i++) {
-                            dataObjs.Set(uint32_t(i), toNapiFunc(env, obj.dataObjects[i], toNapiFunc));
-                        }
-                        napiObj.Set("dataObjects", dataObjs);
-                    } else {
-                        Napi::Array nodes = Napi::Array::New(env, obj.logicalNodes.size());
-                        for (size_t i = 0; i < obj.logicalNodes.size(); i++) {
-                            nodes.Set(uint32_t(i), toNapiFunc(env, obj.logicalNodes[i], toNapiFunc));
-                        }
-                        napiObj.Set("logicalNodes", nodes);
-                    }
-                    return napiObj;
-                };
-                Napi::Array devicesArray = Napi::Array::New(env, logicalDevices.size());
-                for (size_t i = 0; i < logicalDevices.size(); i++) {
-                    devicesArray.Set(uint32_t(i), toNapiObject(env, logicalDevices[i], toNapiObject));
-                }
-                eventObj.Set("logicalDevices", devicesArray);
-                std::vector<napi_value> args = {Napi::String::New(env, "data"), eventObj};
-                jsCallback.Call(args);
-            } catch (const Napi::Error& e) {
-                printf("N-API Callback Error in GetLogicalDevices: %s, clientID: %s\n", e.Message().c_str(), clientID_.c_str());
-            }
-        });
+        }             
+        
         Napi::Array resultArray = Napi::Array::New(env, logicalDevices.size());
         for (size_t i = 0; i < logicalDevices.size(); i++) {
             auto toNapiObject = [](Napi::Env env, const auto& obj, auto toNapiFunc) -> Napi::Value {
@@ -3208,22 +3105,13 @@ Napi::Value MmsClient::GetLogicalDevices(const Napi::CallbackInfo& info) {
             };
             resultArray.Set(uint32_t(i), toNapiObject(env, logicalDevices[i], toNapiObject));
         }
+        printf("GetLogicalDevices: Successfully retrieved %zu logical devices, clientID: %s\n", 
+               logicalDevices.size(), clientID_.c_str());
         deferred.Resolve(resultArray);
         return deferred.Promise();
     } catch (const std::exception& e) {
-        printf("Exception in GetLogicalDevices: %s, clientID: %s\n", e.what(), clientID_.c_str());
-        tsfn_.NonBlockingCall([this, e](Napi::Env env, Napi::Function jsCallback) {
-            try {
-                Napi::Object eventObj = Napi::Object::New(env);
-                eventObj.Set("clientID", Napi::String::New(env, clientID_.c_str()));
-                eventObj.Set("type", Napi::String::New(env, "error"));
-                eventObj.Set("reason", Napi::String::New(env, std::string("Exception in GetLogicalDevices: ") + e.what()));
-                std::vector<napi_value> args = {Napi::String::New(env, "data"), eventObj};
-                jsCallback.Call(args);
-            } catch (const Napi::Error& e) {
-                printf("N-API Callback Error in GetLogicalDevices: %s, clientID: %s\n", e.Message().c_str(), clientID_.c_str());
-            }
-        });
+        printf("GetLogicalDevices: Exception occurred: %s, clientID: %s\n", e.what(), clientID_.c_str());
+         
         deferred.Reject(Napi::Error::New(env, std::string("Exception in GetLogicalDevices: ") + e.what()).Value());
         return deferred.Promise();
     }

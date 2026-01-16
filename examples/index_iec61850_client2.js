@@ -147,7 +147,7 @@ async function handleConnectionOpened() {
             });
         });
 
-        console.log('Reading data...');
+        /*console.log('Reading data...');
         const dataRefs = [
             'WAGO61850ServerDevice/XCBR1.Pos[ST]',
             'WAGO61850ServerDevice/GGIO1.Ind1.stVal',
@@ -159,9 +159,9 @@ async function handleConnectionOpened() {
         const rcbRef2 = 'WAGO61850ServerDevice/LLN0.RP.ReportBlock0201';
         const dataSetRef2 = 'WAGO61850ServerDevice/LLN0.DataSet02';
         console.log(`Enabling reporting for ${rcbRef2} with dataset ${dataSetRef2}`);
-        await client.enableReporting(rcbRef2, dataSetRef2);
+        await client.enableReporting(rcbRef2, dataSetRef2);*/
 
-        /*console.log('Reading data...');
+        console.log('Reading data...');
         const dataRefs = [
             'A01LD0/Q1_XCBR1.Pos[ST]',
             'A01LD0/In_GGIO1.Ind1',
@@ -170,15 +170,15 @@ async function handleConnectionOpened() {
         const readRefResult = await client.readData(dataRefs); 
         console.log("readRefResult " + util.inspect(readRefResult, { depth: null }));
 
-        const rcbRef = 'A01LD0/LLN0.RP.repTI1';
+       /* const rcbRef = 'A01LD0/LLN0.RP.repTI1';
         const dataSetRef = 'A01LD0/LLN0.TI_ASU';
         console.log(`Enabling reporting for ${rcbRef} with dataset ${dataSetRef}`);
-        await client.enableReporting(rcbRef, dataSetRef);
+        await client.enableReporting(rcbRef, dataSetRef);*/
 
         const rcbRef2 = 'A01LD0/LLN0.BR.repTS1';
         const dataSetRef2 = 'A01LD0/LLN0.TS_ASU';
         console.log(`Enabling reporting for ${rcbRef2} with dataset ${dataSetRef2}`);
-        await client.enableReporting(rcbRef2, dataSetRef2);*/
+        await client.enableReporting(rcbRef2, dataSetRef2);
 
     } catch (err) {
         console.error('Error in handleConnectionOpened:', err.message);
@@ -201,13 +201,13 @@ async function main() {
         console.log('Waiting for data and reports...');
         await sleep(30000);
 
-        /*const rcbRef = 'A01LD0/LLN0.RP.repTI1';
+        const rcbRef = 'A01LD0/LLN0.BR.repTS1';
         console.log(`Disabling reporting for ${rcbRef}`);
-        await client.disableReporting(rcbRef);*/
+        await client.disableReporting(rcbRef);
 
-        const rcbRef2 = 'WAGO61850ServerDevice/LLN0.RP.ReportBlock0201';
+        /*const rcbRef2 = 'WAGO61850ServerDevice/LLN0.RP.ReportBlock0201';
         console.log(`Disabling reporting for ${rcbRef2}`);
-        await client.disableReporting(rcbRef2);
+        await client.disableReporting(rcbRef2);*/
 
         console.log('Client status:', client.getStatus());
         console.log('Closing client...');
