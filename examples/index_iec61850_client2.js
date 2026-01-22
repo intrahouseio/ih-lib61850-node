@@ -189,7 +189,7 @@ async function main() {
     try {
         console.log('Starting client...');
         await client.connect({
-            ip: '192.168.0.106',
+            ip: '192.168.0.122',
             port: 102,
             clientID: 'mms_client1',
             reconnectDelay: 2,

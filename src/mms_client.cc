@@ -355,6 +355,8 @@ static void CacheStructureElementNames(IedConnection connection,
 
 // Упрощенная функция для быстрой конвертации MMS значений
 static MmsClient::ResultData ConvertMmsValueForReportFast(MmsValue* val, const std::string& attrName, int depth = 0) {
+    printf("    ConvertMmsValueForReportFast: attrName='%s', MMS type=%d\n", attrName.c_str(), MmsValue_getType(val));
+
     MmsClient::ResultData data;
     
     // Ограничиваем глубину рекурсии
@@ -396,8 +398,24 @@ static MmsClient::ResultData ConvertMmsValueForReportFast(MmsValue* val, const s
             case MMS_INTEGER:
             case MMS_UNSIGNED:
                 data.intValue = MmsValue_toInt64(val);
+                
+                // Специальная обработка для stVal типа DPC, который в отчетах приходит как INTEGER
+                if (attrName.find("stVal") != std::string::npos) {
+                    // Преобразование согласно стандарту для DPC:
+                    // 0 = intermediate-state, 1 = off, 2 = on, 3 = bad-state
+                    int64_t intVal = data.intValue;
+                    switch (intVal) {
+                        case 0: data.stringValue = "intermediate-state"; break;
+                        case 1: data.stringValue = "off"; break;
+                        case 2: data.stringValue = "on"; break;
+                        case 3: data.stringValue = "bad-state"; break;
+                        default: data.stringValue = "unknown(" + std::to_string(intVal) + ")";
+                    }
+                    // Для отладки:
+                    printf("    [DPC-stVal] attrName='%s', intValue=%lld, stringValue='%s'\n", 
+                        attrName.c_str(), data.intValue, data.stringValue.c_str());
+                }
                 break;
-
             case MMS_BOOLEAN:
                 data.boolValue = MmsValue_getBoolean(val);
                 break;
@@ -416,16 +434,22 @@ static MmsClient::ResultData ConvertMmsValueForReportFast(MmsValue* val, const s
                 uint32_t bits = MmsValue_getBitStringAsInteger(val);
                 data.intValue = static_cast<int64_t>(bits);
                 
-                // ТОЛЬКО для stVal
-                if (attrName.find("stVal") != std::string::npos && MmsValue_getBitStringSize(val) == 2) {
+                int bitSize = MmsValue_getBitStringSize(val);
+                
+                // 1. Общий отладочный вывод для всех битовых строк
+                printf("    [BitString] attrName='%s', bits=%u (0x%X), size=%d\n", 
+                    attrName.c_str(), bits, bits, bitSize);
+                
+                // 2. ПРЯМОЕ СОПОСТАВЛЕНИЕ: если attrName ТОЧНО РАВЕН "stVal"
+                if (attrName == "stVal" && bitSize == 2) {
+                    printf("    [Прямое сопоставление stVal] Найдено по имени.\n");
                     uint32_t msbValue = 0;
                     uint32_t lsbValue = bits;
-                    
                     for (int i = 0; i < 2; i++) {
                         int bit = (lsbValue >> i) & 1;
                         msbValue |= (bit << (1 - i));
                     }
-                    
+                    data.intValue = static_cast<int64_t>(msbValue);
                     switch (msbValue) {
                         case 0: data.stringValue = "intermediate-state"; break;
                         case 1: data.stringValue = "off"; break;
@@ -433,8 +457,41 @@ static MmsClient::ResultData ConvertMmsValueForReportFast(MmsValue* val, const s
                         case 3: data.stringValue = "bad-state"; break;
                         default: data.stringValue = "unknown(" + std::to_string(msbValue) + ")";
                     }
+                    printf("    [DPC] Преобразованное: intValue=%lld, stringValue='%s'\n", 
+                        data.intValue, data.stringValue.c_str());
                 }
-                // Для q НЕ формируем строку флагов
+                // 3. ЭВРИСТИКА ДЛЯ ОТЧЕТОВ: если имя - цифра, это может быть индекс внутри структуры
+                //    Проверяем, является ли attrName одной цифрой (например, '0', '1').
+                else if (attrName.length() == 1 && isdigit(attrName[0])) {
+                    int index = attrName[0] - '0'; // Преобразуем символ цифры в число
+                    
+                    // Индекс 0 в структуре статуса [ST] - это stVal (DPC, 2 бита)
+                    if (index == 0 && bitSize == 2) {
+                        printf("    [Эвристика] Обнаружен вероятный stVal по индексу 0 в структуре.\n");
+                        uint32_t msbValue = 0;
+                        uint32_t lsbValue = bits;
+                        for (int i = 0; i < 2; i++) {
+                            int bit = (lsbValue >> i) & 1;
+                            msbValue |= (bit << (1 - i));
+                        }
+                        data.intValue = static_cast<int64_t>(msbValue);
+                        switch (msbValue) {
+                            case 0: data.stringValue = "intermediate-state"; break;
+                            case 1: data.stringValue = "off"; break;
+                            case 2: data.stringValue = "on"; break;
+                            case 3: data.stringValue = "bad-state"; break;
+                            default: data.stringValue = "unknown(" + std::to_string(msbValue) + ")";
+                        }
+                        printf("    [DPC] Преобразованное: intValue=%lld, stringValue='%s'\n", 
+                            data.intValue, data.stringValue.c_str());
+                    }
+                    // Индекс 1 - это качество 'q' (оставляем как битовую строку-число)
+                    else if (index == 1) {
+                        printf("    [Эвристика] Обнаружено качество (q) по индексу 1. Значение: %u\n", bits);
+                        // Для q оставляем data.intValue = bits (битовая строка как число)
+                        // data.stringValue остаётся пустой
+                    }
+                }
                 break;
             }
 
@@ -486,6 +543,8 @@ static MmsClient::ResultData ConvertMmsValueForReportFast(MmsValue* val, const s
     
     return data;
 }
+
+
 
 // Функция для преобразования строки FC в числовое значение
 static FunctionalConstraint ParseFCFromString(const std::string& fcStr) {
@@ -1923,8 +1982,14 @@ static Napi::Value SafeConvertMmsValue(Napi::Env env, IedConnection connection, 
         case MMS_BIT_STRING: {
             uint32_t bits = MmsValue_getBitStringAsInteger(val);
             
-            // ТОЛЬКО для DPC (stVal)
+            // Для DPC (stVal)
             if (elementName.find("stVal") != std::string::npos && MmsValue_getBitStringSize(val) == 2) {
+                // Для DPC (stVal) - 2-битное значение
+                // В стандарте IEC 61850 для DPC:
+                // 00 (0) = intermediate-state
+                // 01 (1) = off
+                // 10 (2) = on
+                // 11 (3) = bad-state
                 uint32_t msbValue = 0;
                 uint32_t lsbValue = bits;
                 
@@ -3211,7 +3276,7 @@ static Napi::Value ResultDataToNapiWithNames(Napi::Env env,
     }
 }
 
-void MmsClient::ReportCallback(void* parameter, ClientReport report) {
+/*void MmsClient::ReportCallback(void* parameter, ClientReport report) {
     MmsClient* client = static_cast<MmsClient*>(parameter);
     
     auto startTime = std::chrono::steady_clock::now();
@@ -3405,6 +3470,329 @@ void MmsClient::ReportCallback(void* parameter, ClientReport report) {
                         }
                         
                         Napi::Value jsValue = ResultDataToNapiWithNames(env, enhancedData, item.attrName);
+                        valuesObj.Set(item.fullRef, jsValue);
+                        reasonsObj.Set(item.fullRef, item.reason);
+                    } catch (const std::exception& e) {
+                        printf("  [TSFN] Exception converting item %s: %s\n", item.fullRef.c_str(), e.what());
+                        valuesObj.Set(item.fullRef, Napi::String::New(env, "Conversion Exception"));
+                        reasonsObj.Set(item.fullRef, item.reason);
+                    }
+                }
+                
+                eventObj.Set("values", valuesObj);
+                eventObj.Set("reasons", reasonsObj);
+                
+                // Добавляем диагностическую информацию
+                eventObj.Set("reportNumber", Napi::Number::New(env, MmsClient::totalReportsProcessed_.load()));
+                eventObj.Set("totalElementsProcessed", Napi::Number::New(env, MmsClient::totalElementsProcessed_.load()));
+                
+                cb.Call({Napi::String::New(env, "data"), eventObj});
+                printf("  [TSFN] Report event sent to JS successfully for RCB: %s\n", rcbRef.c_str());
+                
+            } catch (const std::exception& e) {
+                printf("  [TSFN] std::exception in ReportCallback: %s\n", e.what());
+            } catch (...) {
+                printf("  [TSFN] Unknown exception in ReportCallback\n");
+            }
+        });
+        
+        if (status != napi_ok) {
+            printf("  ERROR: Failed to queue report to TSFN, status: %d\n", status);
+        }
+    } else {
+        printf("  No valid items to send to JS\n");
+    }
+    
+    auto endTime = std::chrono::steady_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime);
+    
+    printf("  Report processing time: %lld ms\n", duration.count());
+    printf("=== ReportCallback END ===\n\n");
+}*/
+
+void MmsClient::ReportCallback(void* parameter, ClientReport report) {
+    MmsClient* client = static_cast<MmsClient*>(parameter);
+    
+    auto startTime = std::chrono::steady_clock::now();
+    MmsClient::totalReportsProcessed_++;
+    
+    int currentReport = MmsClient::totalReportsProcessed_.load();
+    
+    printf("\n=== ReportCallback [REPORT#%d] ===\n", currentReport);
+    printf("  Thread ID: %zu\n", std::hash<std::thread::id>{}(std::this_thread::get_id()));
+    printf("  clientID: %s\n", client->clientID_.c_str());
+    
+    // Быстрая проверка состояния клиента
+    bool isClosing = false;
+    bool isConnected = false;
+    
+    {
+        std::lock_guard<std::recursive_mutex> lock(client->connMutex_);
+        isClosing = client->isClosing_;
+        isConnected = client->connected_;
+    }
+    
+    if (isClosing) {
+        printf("  Client is closing, skipping report\n");
+        return;
+    }
+    
+    if (!isConnected) {
+        printf("  Client not connected, skipping report\n");
+        return;
+    }
+    
+    // Получаем информацию об отчете
+    const char* rcbRefRaw = ClientReport_getRcbReference(report);
+    const char* rptIdRaw = ClientReport_getRptId(report);
+    std::string rcbRef = rcbRefRaw ? rcbRefRaw : "unknown";
+    std::string rptId = rptIdRaw ? rptIdRaw : "unknown";
+    
+    printf("  Report for RCB: %s, rptId: %s\n", rcbRef.c_str(), rptId.c_str());
+    
+    // Получаем значения DataSet
+    MmsValue* dataSetValues = ClientReport_getDataSetValues(report);
+    
+    if (!dataSetValues) {
+        printf("  ERROR: dataSetValues is NULL\n");
+        return;
+    }
+
+    int dataSetSize = MmsValue_getArraySize(dataSetValues);
+    
+    printf("  dataSetValues: type=%d, array size=%d\n", MmsValue_getType(dataSetValues), dataSetSize);
+    
+    // Получаем информацию об отчете с блокировкой
+    MmsClient::ReportInfo* reportInfo = nullptr;
+    std::vector<std::string> dataSetMembers;
+    
+    {
+        std::lock_guard<std::recursive_mutex> lock(client->connMutex_);
+        auto it = client->activeReports_.find(rcbRef);
+        if (it != client->activeReports_.end()) {
+            reportInfo = &it->second;
+            dataSetMembers = reportInfo->dataSetMembers;
+            printf("  Found active report, dataSet members: %zu\n", dataSetMembers.size());
+        } else {
+            printf("  WARNING: ReportInfo not found for %s\n", rcbRef.c_str());
+            return;
+        }
+    }
+    
+    if (dataSetMembers.size() != static_cast<size_t>(dataSetSize)) {
+        printf("  WARNING: Members count (%zu) != DataSet size (%d)\n", 
+               dataSetMembers.size(), dataSetSize);
+    }
+    
+    // Ограничиваем обработку для больших отчетов
+    const int MAX_ELEMENTS_TO_PROCESS = 200;
+    int elementsToProcess = std::min(dataSetSize, MAX_ELEMENTS_TO_PROCESS);
+    
+    bool hasTimestamp = ClientReport_hasTimestamp(report);
+    uint64_t timestamp = 0;
+    
+    if (hasTimestamp) {
+        timestamp = ClientReport_getTimestamp(report);
+        printf("  Report has timestamp: %llu ms\n", (unsigned long long)timestamp);
+    }
+    
+    // Быстрая обработка данных
+    struct ReportItemData {
+        std::string fullRef;
+        MmsClient::ResultData resultData;
+        int reason;
+    };
+    
+    std::vector<ReportItemData> reportItems;
+    
+    // Вспомогательная функция для обработки структурных значений
+    std::function<MmsClient::ResultData(MmsValue*, const std::string&, int)> processValueRecursive;
+    processValueRecursive = [&](MmsValue* val, const std::string& fullRef, int recursionDepth) -> MmsClient::ResultData {
+        MmsClient::ResultData data;
+        
+        const int MAX_RECURSION_DEPTH = 5;
+        if (recursionDepth > MAX_RECURSION_DEPTH) {
+            data.type = MMS_STRUCTURE;
+            data.isValid = false;
+            data.errorReason = "Max recursion depth exceeded";
+            return data;
+        }
+        
+        if (!val) {
+            data.type = MMS_DATA_ACCESS_ERROR;
+            data.isValid = false;
+            data.errorReason = "Null value";
+            return data;
+        }
+        
+        data.type = MmsValue_getType(val);
+        data.isValid = true;
+        data.errorReason = "";
+        
+        // Извлекаем имя атрибута из полной ссылки
+        std::string attrName = fullRef;
+        size_t dotPos = fullRef.rfind('.');
+        if (dotPos != std::string::npos) {
+            attrName = fullRef.substr(dotPos + 1);
+        }
+        
+        // Проверяем, является ли это структурой статуса [ST]
+        bool isStatusStructure = false;
+        size_t bracketPos = fullRef.find('[');
+        if (bracketPos != std::string::npos) {
+            std::string fcPart = fullRef.substr(bracketPos);
+            if (fcPart.find("[ST]") != std::string::npos || fcPart.find("[st]") != std::string::npos) {
+                isStatusStructure = true;
+            }
+        }
+        
+        if (data.type == MMS_STRUCTURE) {
+            int size = MmsValue_getArraySize(val);
+            
+            // Для структур статуса [ST] используем стандартные имена
+            if (isStatusStructure && size >= 3) {
+                // Стандартная структура статуса: stVal, q, t
+                const char* stdNames[] = {"stVal", "q", "t"};
+                
+                for (int i = 0; i < std::min(size, 3); ++i) {
+                    MmsValue* childVal = MmsValue_getElement(val, i);
+                    if (childVal) {
+                        // Формируем полную ссылку для дочернего элемента
+                        std::string childFullRef = fullRef;
+                        if (bracketPos != std::string::npos) {
+                            // Вставляем имя элемента перед [ST]
+                            childFullRef = fullRef.substr(0, bracketPos) + "." + stdNames[i] + 
+                                         fullRef.substr(bracketPos);
+                        } else {
+                            childFullRef = fullRef + "." + stdNames[i];
+                        }
+                        
+                        // Рекурсивно обрабатываем дочерний элемент
+                        MmsClient::ResultData childData = processValueRecursive(childVal, childFullRef, recursionDepth + 1);
+                        data.structureElements.push_back(childData);
+                        data.structureElementNames.push_back(stdNames[i]);
+                    }
+                }
+            } else {
+                // Для нестандартных структур используем индексы
+                for (int i = 0; i < size; ++i) {
+                    MmsValue* childVal = MmsValue_getElement(val, i);
+                    if (childVal) {
+                        std::string indexName = std::to_string(i);
+                        std::string childFullRef = fullRef + "." + indexName;
+                        
+                        MmsClient::ResultData childData = processValueRecursive(childVal, childFullRef, recursionDepth + 1);
+                        data.structureElements.push_back(childData);
+                        data.structureElementNames.push_back(indexName);
+                    }
+                }
+            }
+        } else {
+            // Для простых типов используем ConvertMmsValueForReportFast с правильным именем
+            data = ConvertMmsValueForReportFast(val, attrName);
+            
+            // Если это stVal в структуре статуса, убедимся, что имя правильное
+            if (isStatusStructure && attrName.find("stVal") != std::string::npos) {
+                // Уже должно быть обработано в ConvertMmsValueForReportFast
+            }
+        }
+        
+        return data;
+    };
+    
+    // Обрабатываем данные
+    for (int i = 0; i < elementsToProcess; i++) {
+        ReasonForInclusion reason = ClientReport_getReasonForInclusion(report, i);
+        
+        if (reason == IEC61850_REASON_NOT_INCLUDED) {
+            continue;
+        }
+        
+        std::string fullRef;
+        if (i < static_cast<int>(dataSetMembers.size())) {
+            fullRef = dataSetMembers[i];
+        } else {
+            fullRef = "unknown[" + std::to_string(i) + "]";
+        }
+        
+        MmsValue* value = MmsValue_getElement(dataSetValues, i);
+        if (!value) {
+            continue;
+        }
+        
+        // Обрабатываем значение (рекурсивно для структур)
+        try {
+            MmsClient::ResultData rd = processValueRecursive(value, fullRef, 0);
+            
+            ReportItemData item;
+            item.fullRef = fullRef;
+            item.resultData = rd;
+            item.reason = reason;
+            
+            reportItems.push_back(item);
+        } catch (const std::exception& e) {
+            printf("    [%d] Exception in processValueRecursive: %s\n", i, e.what());
+        } catch (...) {
+            printf("    [%d] Unknown exception in processValueRecursive\n", i);
+        }
+    }
+    
+    printf("  Processed %zu items from report\n", reportItems.size());
+    MmsClient::totalElementsProcessed_ += reportItems.size();
+    
+    // Отправляем в JS если есть что отправлять
+    if (!reportItems.empty() && client->tsfn_) {
+        printf("  Sending report event to JS...\n");
+        
+        // Проверяем состояние соединения перед отправкой
+        {
+            std::lock_guard<std::recursive_mutex> lock(client->connMutex_);
+            if (!client->connected_ || client->isClosing_) {
+                printf("  Client disconnected or closing, skipping send to JS\n");
+                return;
+            }
+        }
+        
+        // Передаем данные в основной поток
+        auto status = client->tsfn_.NonBlockingCall([client, rcbRef, rptId, timestamp, hasTimestamp, reportItems, reportInfo]
+                                                    (Napi::Env env, Napi::Function cb) {
+            try {
+                printf("  [TSFN] Processing report in JS thread for RCB: %s\n", rcbRef.c_str());
+                
+                // Проверяем, не закрывается ли клиент
+                {
+                    std::lock_guard<std::recursive_mutex> lock(client->connMutex_);
+                    if (client->isClosing_) {
+                        printf("  [TSFN] Skipping report for %s - client is closing\n", rcbRef.c_str());
+                        return;
+                    }
+                }
+                
+                Napi::Object eventObj = Napi::Object::New(env);
+                eventObj.Set("clientID", Napi::String::New(env, client->clientID_.c_str()));
+                eventObj.Set("type", "data");
+                eventObj.Set("event", "report");
+                eventObj.Set("rcbRef", Napi::String::New(env, rcbRef));
+                eventObj.Set("rptId", Napi::String::New(env, rptId));
+                
+                if (hasTimestamp) {
+                    eventObj.Set("timestamp", Napi::Number::New(env, static_cast<double>(timestamp)));
+                }
+                
+                Napi::Object valuesObj = Napi::Object::New(env);
+                Napi::Object reasonsObj = Napi::Object::New(env);
+                
+                for (const auto& item : reportItems) {
+                    try {
+                        // Копируем ResultData для применения кэша
+                        MmsClient::ResultData enhancedData = item.resultData;
+                        
+                        // ПРИМЕНЯЕМ КЭШИРОВАННЫЕ ИМЕНА ТОЛЬКО ЗДЕСЬ (в JS потоке)
+                        if (reportInfo && enhancedData.type == MMS_STRUCTURE) {
+                            EnhanceStructureWithCachedNames(enhancedData, item.fullRef, *reportInfo);
+                        }
+                        
+                        Napi::Value jsValue = ResultDataToNapiWithNames(env, enhancedData, item.fullRef);
                         valuesObj.Set(item.fullRef, jsValue);
                         reasonsObj.Set(item.fullRef, item.reason);
                     } catch (const std::exception& e) {
