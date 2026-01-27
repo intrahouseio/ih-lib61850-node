@@ -118,7 +118,7 @@ async function handleConnectionOpened() {
             console.log(`  Значений: ${res.count}, Удаляемые: ${res.isDeletable}`);
             
             // Функция для рекурсивного вывода вложенных структур
-            const printValue = (value, indent = '  ') => {
+            /*const printValue = (value, indent = '  ') => {
                 if (value && typeof value === 'object' && !Array.isArray(value)) {
                     Object.entries(value).forEach(([key, val]) => {
                         if (val && typeof val === 'object' && !Array.isArray(val)) {
@@ -144,10 +144,59 @@ async function handleConnectionOpened() {
             Object.entries(res.values).forEach(([ref, value]) => {
                 console.log(`  ${ref}:`);
                 printValue(value, '    ');
-            });
-        });
+            });*/
+            
 
-        /*console.log('Reading data...');
+            // Функция для рекурсивного вывода с полным отображением всех элементов
+            const printModel = (model, indent = '') => {
+                if (Array.isArray(model)) {
+                    model.forEach((item, index) => {
+                        console.log(`${indent}[${index}]:`);
+                        printModel(item, indent + '  ');
+                    });
+                } else if (model && typeof model === 'object') {
+                    Object.entries(model).forEach(([key, value]) => {
+                        if (key === 'dataObjects' && Array.isArray(value)) {
+                            console.log(`${indent}${key}: [`);
+                            value.forEach((doObj, idx) => {
+                                console.log(`${indent}  [${idx}]:`);
+                                printModel(doObj, indent + '    ');
+                            });
+                            console.log(`${indent}]`);
+                        } else if (key === 'attributes' && typeof value === 'object') {
+                            console.log(`${indent}${key}: {`);
+                            printModel(value, indent + '  ');
+                            console.log(`${indent}}`);
+                        } else if (Array.isArray(value)) {
+                            console.log(`${indent}${key}: [`);
+                            value.forEach((item, idx) => {
+                                console.log(`${indent}  [${idx}]: ${item}`);
+                            });
+                            console.log(`${indent}]`);
+                        } else if (typeof value === 'object') {
+                            console.log(`${indent}${key}: {`);
+                            printModel(value, indent + '  ');
+                            console.log(`${indent}}`);
+                        } else {
+                            console.log(`${indent}${key}: ${value}`);
+                        }
+                    });
+                } else {
+                    console.log(`${indent}${model}`);
+                }
+            };
+
+            console.log('\n=== Полная модель устройства ===');
+            printModel(dataModel);
+            console.log('=== Конец модели устройства ===\n');
+
+            // Также можно сохранить модель в файл для анализа
+            //const fs = require('fs');
+            //fs.writeFileSync('device_model.json', JSON.stringify(dataModel, null, 2));
+            //console.log('Модель устройства сохранена в device_model.json');
+            });
+
+        console.log('Reading data...');
         const dataRefs = [
             'WAGO61850ServerDevice/XCBR1.Pos[ST]',
             'WAGO61850ServerDevice/GGIO1.Ind1.stVal',
@@ -159,26 +208,26 @@ async function handleConnectionOpened() {
         const rcbRef2 = 'WAGO61850ServerDevice/LLN0.RP.ReportBlock0201';
         const dataSetRef2 = 'WAGO61850ServerDevice/LLN0.DataSet02';
         console.log(`Enabling reporting for ${rcbRef2} with dataset ${dataSetRef2}`);
-        await client.enableReporting(rcbRef2, dataSetRef2);*/
+        await client.enableReporting(rcbRef2, dataSetRef2);
 
-        console.log('Reading data...');
+        /*console.log('Reading data...');
         const dataRefs = [
             'A01LD0/Q1_XCBR1.Pos[ST]',
             'A01LD0/In_GGIO1.Ind1',
             'A01LD0/CALH1.GrAlm.stVal'
         ];
         const readRefResult = await client.readData(dataRefs); 
-        console.log("readRefResult " + util.inspect(readRefResult, { depth: null }));
+        console.log("readRefResult " + util.inspect(readRefResult, { depth: null }));*/
 
        /* const rcbRef = 'A01LD0/LLN0.RP.repTI1';
         const dataSetRef = 'A01LD0/LLN0.TI_ASU';
         console.log(`Enabling reporting for ${rcbRef} with dataset ${dataSetRef}`);
         await client.enableReporting(rcbRef, dataSetRef);*/
 
-        const rcbRef2 = 'A01LD0/LLN0.BR.repTS1';
+        /*const rcbRef2 = 'A01LD0/LLN0.BR.repTS1';
         const dataSetRef2 = 'A01LD0/LLN0.TS_ASU';
         console.log(`Enabling reporting for ${rcbRef2} with dataset ${dataSetRef2}`);
-        await client.enableReporting(rcbRef2, dataSetRef2);
+        await client.enableReporting(rcbRef2, dataSetRef2);*/
 
     } catch (err) {
         console.error('Error in handleConnectionOpened:', err.message);
@@ -189,7 +238,7 @@ async function main() {
     try {
         console.log('Starting client...');
         await client.connect({
-            ip: '192.168.0.122',
+            ip: '192.168.0.106',
             port: 102,
             clientID: 'mms_client1',
             reconnectDelay: 2,
@@ -201,13 +250,13 @@ async function main() {
         console.log('Waiting for data and reports...');
         await sleep(30000);
 
-        const rcbRef = 'A01LD0/LLN0.BR.repTS1';
+        /*const rcbRef = 'A01LD0/LLN0.BR.repTS1';
         console.log(`Disabling reporting for ${rcbRef}`);
-        await client.disableReporting(rcbRef);
+        await client.disableReporting(rcbRef);*/
 
-        /*const rcbRef2 = 'WAGO61850ServerDevice/LLN0.RP.ReportBlock0201';
+        const rcbRef2 = 'WAGO61850ServerDevice/LLN0.RP.ReportBlock0201';
         console.log(`Disabling reporting for ${rcbRef2}`);
-        await client.disableReporting(rcbRef2);*/
+        await client.disableReporting(rcbRef2);
 
         console.log('Client status:', client.getStatus());
         console.log('Closing client...');
