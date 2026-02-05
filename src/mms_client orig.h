@@ -9,7 +9,6 @@
 #include <map>
 #include <unordered_map>
 #include <chrono>
-#include <string>
 #include <iec61850_client.h>
 
 // Структура для хранения информации о именах элементов структуры
@@ -37,8 +36,6 @@ public:
     // флаг для управления соединением
     bool connectionClosingIntentionally_ = false;
 
-
-
     struct ReportInfo {
         ClientReportControlBlock rcb = nullptr;
         ClientDataSet dataSet = nullptr;
@@ -48,9 +45,6 @@ public:
                 
         // Добавляем кэш имен элементов для этого DataSet
         std::unordered_map<std::string, std::vector<std::string>> structureElementNamesCache;
-
-        // НОВЫЙ: Кэш типов элементов структуры
-        std::unordered_map<std::string, std::vector<MmsType>> structureElementTypesCache;
 
         // Диагностика
         size_t lastReportSize = 0;
@@ -121,8 +115,6 @@ public:
                                const std::vector<std::string>& elementNames,
                                const std::vector<MmsType>& elementTypes);
 
-    Napi::Value PollDataSetValues(const Napi::CallbackInfo& info);
-
 private:
     // Диагностические счетчики
     static std::atomic<int> totalReportsProcessed_;
@@ -150,11 +142,9 @@ private:
     Napi::Value BrowseDataModel(const Napi::CallbackInfo& info);
 
     Napi::Value EnableReporting(const Napi::CallbackInfo& info);
-    Napi::Value DisableReporting(const Napi::CallbackInfo& info);    
+    Napi::Value DisableReporting(const Napi::CallbackInfo& info);     
 
     static void ReportCallback(void* parameter, ClientReport report);
-
-    Napi::Value ReadDataSetValuesFast(const std::string& datasetRef, Napi::Env env);    
 
     // Кэш для имен элементов структур
     std::unordered_map<std::string, DataSetCache> datasetCache_;
@@ -168,16 +158,7 @@ private:
     bool running_;
     bool connected_;
     std::string clientID_;
-    bool usingPrimaryIp_;
-
-    // Новые методы для обхода модели данных
-    Napi::Value GetRootNodes(Napi::Env env);
-    Napi::Value BrowseSpecificObject(Napi::Env env, const std::string& ref);
-    Napi::Value GetLogicalNodeDetails(Napi::Env env, const std::string& lnRef);
-    Napi::Value GetDataObjectDetails(Napi::Env env, const std::string& doRef);
-    Napi::Value GetDataSetDetails(Napi::Env env, const std::string& dsRef);
-    Napi::Value GetReportDetails(Napi::Env env, const std::string& rRef);   
-
+    bool usingPrimaryIp_;    
 };
 
 #endif

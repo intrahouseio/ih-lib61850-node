@@ -4,10 +4,31 @@ const util = require('util');
 const client = new MmsClient((event, data) => {
     console.log(`Event: ${event}, Data: ${util.inspect(data, { depth: null })}`);
 
-    if (event === 'conn' && data.event === 'opened') {
+    /*if (event === 'conn' && data.event === 'opened') {
         console.log('Connection opened, browsing data model...');
-        handleConnectionOpened();
+        //handleConnectionOpened();
+        handleConnectionOpened2();
+    }*/
+
+    if (event === 'conn' && data.event === 'opened') {
+        console.log('Connection opened');
+        // Теперь пользователь сам решит, как исследовать модель
+        console.log('\n=== Примеры использования: ===');
+        console.log('1. Получить корневые узлы:');
+        console.log('   client.browseDataModel()');
+        console.log('\n2. Получить DataObjects конкретного узла:');
+        console.log('   client.browseDataModel("WAGO61850ServerDevice/LLN0")');
+        console.log('\n3. Получить атрибуты DataObject:');
+        console.log('   client.browseDataModel("WAGO61850ServerDevice/XCBR1.Pos")');
+        console.log('\n4. Получить члены DataSet:');
+        console.log('   client.browseDataModel("WAGO61850ServerDevice/LLN0.DataSet01")');
+        console.log('\n5. Получить информацию об отчете:');
+        console.log('   client.browseDataModel("WAGO61850ServerDevice/LLN0.RP$ReportBlock0101")');
+        
+        // Автоматически получаем корневые узлы для примера
+        exploreModel();
     }
+
 
     if (event === 'data' && data.type === 'data') {
         if (data.event === 'logicalDevices') {
@@ -85,7 +106,7 @@ const client = new MmsClient((event, data) => {
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-async function handleConnectionOpened() {
+/*async function handleConnectionOpened() {
     try {
         const dataModel = await client.browseDataModel();
         console.log('Data Model:', util.inspect(dataModel, { depth: null }));
@@ -144,7 +165,7 @@ async function handleConnectionOpened() {
             Object.entries(res.values).forEach(([ref, value]) => {
                 console.log(`  ${ref}:`);
                 printValue(value, '    ');
-            });*/
+            });
             
 
             // Функция для рекурсивного вывода с полным отображением всех элементов
@@ -185,15 +206,7 @@ async function handleConnectionOpened() {
                     console.log(`${indent}${model}`);
                 }
             };
-
-            console.log('\n=== Полная модель устройства ===');
-            printModel(dataModel);
-            console.log('=== Конец модели устройства ===\n');
-
-            // Также можно сохранить модель в файл для анализа
-            //const fs = require('fs');
-            //fs.writeFileSync('device_model.json', JSON.stringify(dataModel, null, 2));
-            //console.log('Модель устройства сохранена в device_model.json');
+           
             });
 
         console.log('Reading data...');
@@ -227,10 +240,469 @@ async function handleConnectionOpened() {
         /*const rcbRef2 = 'A01LD0/LLN0.BR.repTS1';
         const dataSetRef2 = 'A01LD0/LLN0.TS_ASU';
         console.log(`Enabling reporting for ${rcbRef2} with dataset ${dataSetRef2}`);
-        await client.enableReporting(rcbRef2, dataSetRef2);*/
+        await client.enableReporting(rcbRef2, dataSetRef2);
 
     } catch (err) {
         console.error('Error in handleConnectionOpened:', err.message);
+    }
+}*/
+
+async function handleConnectionOpened() {    
+        try {
+            const dataModel = await client.browseDataModel();
+            
+            const dataSets = [];
+            const reports = [];
+            
+            dataModel.forEach(ld => {
+                console.log(`\nLogical Device: ${ld.name}`);
+                
+                ld.logicalNodes.forEach(ln => {
+                    console.log(`  Logical Node: ${ln.name} (${ln.reference})`);
+                    
+                    // Вывод DataSets
+                    if (ln.dataSets && ln.dataSets.length > 0) {
+                        console.log(`    Datasets (${ln.dataSets.length}):`);
+                        ln.dataSets.forEach(ds => {
+                            console.log(`      - ${ds.reference} (Deletable: ${ds.isDeletable})`);
+                            dataSets.push(ds);
+                        });
+                    }
+                    
+                    // Вывод отчетов (Report Control Blocks)
+                    if (ln.reports && ln.reports.length > 0) {
+                        console.log(`    Reports (${ln.reports.length}):`);
+                        ln.reports.forEach((report, index) => {
+                            console.log(`      [${index + 1}] ${report.reference}`);
+                            console.log(`          Type: ${report.type} (${report.description || 'N/A'})`);
+                            if (report.datasetRef) {
+                                console.log(`          Dataset: ${report.datasetRef}`);
+                            }
+                            if (report.reportId) {
+                                console.log(`          Report ID: ${report.reportId}`);
+                            }
+                            console.log(`          Enabled: ${report.enabled !== undefined ? report.enabled : 'Unknown'}`);
+                            reports.push(report);
+                        });
+                    } else {
+                        console.log(`    No reports found`);
+                    }
+                });
+            });
+    
+            console.log('\n=== SUMMARY ===');
+            console.log(`Total Logical Devices: ${dataModel.length}`);
+            
+            let totalDataSets = 0;
+            let totalReports = 0;
+            
+            dataModel.forEach(ld => {
+                ld.logicalNodes.forEach(ln => {
+                    totalDataSets += (ln.dataSets ? ln.dataSets.length : 0);
+                    totalReports += (ln.reports ? ln.reports.length : 0);
+                });
+            });
+            
+            console.log(`Total Datasets found: ${totalDataSets}`);
+            console.log(`Total Reports found: ${totalReports}`);
+            
+            // Выводим все найденные отчеты для удобства
+            console.log('\n=== ALL FOUND REPORTS ===');
+            reports.forEach((report, index) => {
+                const enabledStatus = report.enabled !== undefined ? 
+                    (report.enabled ? 'ENABLED' : 'DISABLED') : 'UNKNOWN';
+                console.log(`${index + 1}. ${report.reference} (${report.type}) - ${enabledStatus}`);
+                if (report.datasetRef) {
+                    console.log(`   Dataset: ${report.datasetRef}`);
+                }
+            });
+    
+            console.log('\n=== RECOMMENDED REPORTS FOR ENABLING ===');
+            // Ищем отчеты с DataSet02 (как в примере)
+            const recommendedReports = reports.filter(r => 
+                r.datasetRef && r.datasetRef.includes('DataSet02')
+            );
+            
+            if (recommendedReports.length > 0) {
+                recommendedReports.forEach((report, index) => {
+                    console.log(`${index + 1}. ${report.reference}`);
+                    console.log(`   Dataset: ${report.datasetRef}`);
+                    console.log(`   To enable: client.enableReporting("${report.reference}", "${report.datasetRef}")`);
+                });
+            } else {
+                console.log('No reports with DataSet02 found.');
+                // Предлагаем другие отчеты
+                if (reports.length > 0) {
+                    console.log('\nAvailable reports with datasets:');
+                    reports.filter(r => r.datasetRef).forEach((report, index) => {
+                        console.log(`${index + 1}. ${report.reference} -> ${report.datasetRef}`);                  
+                });
+            }
+        }
+    } catch (err) {
+        console.error('Error in handleConnectionOpened:', err.message);
+    }
+}
+
+async function handleConnectionOpened2() {
+    try {
+        const dataModel = await client.browseDataModel();
+        console.log('Data Model:', util.inspect(dataModel, { depth: null }));
+
+        const dataSets = [];
+        const reports = [];
+        
+        dataModel.forEach(ld => {
+            console.log(`\nLogical Device: ${ld.name}`);
+            
+            ld.logicalNodes.forEach(ln => {
+                console.log(`  Logical Node: ${ln.name}`);
+                
+                // Вывод DataSets
+                if (ln.dataSets && ln.dataSets.length > 0) {
+                    ln.dataSets.forEach(ds => {
+                        console.log(`    Dataset: ${ds.reference} (Deletable: ${ds.isDeletable})`);
+                        dataSets.push(ds);
+                    });
+                }
+                
+                // Вывод отчетов (RCB - Report Control Blocks)
+                if (ln.reports && ln.reports.length > 0) {
+                    console.log(`    Reports (${ln.reports.length}):`);
+                    ln.reports.forEach((report, index) => {
+                        console.log(`      [${index + 1}] ${report.reference}`);
+                        console.log(`          Type: ${report.type} (${report.description})`);
+                        if (report.datasetRef) {
+                            console.log(`          Dataset: ${report.datasetRef}`);
+                        }
+                        if (report.reportId) {
+                            console.log(`          Report ID: ${report.reportId}`);
+                        }
+                        console.log(`          Enabled: ${report.enabled}`);
+                        reports.push(report);
+                    });
+                } else {
+                    console.log(`    No reports found for ${ln.reference}`);
+                }
+            });
+        });
+
+        console.log('\n=== SUMMARY ===');
+        console.log(`Total Logical Devices: ${dataModel.length}`);
+        console.log(`Total Datasets found: ${dataSets.length}`);
+        console.log(`Total Reports found: ${reports.length}`);
+        
+        // Выводим все найденные отчеты для удобства
+        console.log('\n=== ALL FOUND REPORTS ===');
+        reports.forEach((report, index) => {
+            console.log(`${index + 1}. ${report.reference} (${report.type})`);
+        });
+
+        // 1. Читаем модель устройства
+        /*const dataModel = await client.browseDataModel();
+        console.log('Data Model:', util.inspect(dataModel, { depth: null }));
+
+        const dataSets = [];
+        dataModel.forEach(ld => {
+            ld.logicalNodes.forEach(ln => {
+                ln.dataSets.forEach(ds => {
+                    console.log(`Found dataset: ${ds.reference}`);
+                    dataSets.push(ds);
+                });
+            });
+        });*/
+
+        // 2. Читаем одиночные значения
+        console.log('Reading single values...');
+        const dataRefs = [
+            'WAGO61850ServerDevice/XCBR1.Pos[ST]',
+            'WAGO61850ServerDevice/GGIO1.Ind1[ST]',
+            'WAGO61850ServerDevice/CALH12.GrAlm.stVal'
+        ];
+        const readRefResult = await client.readData(dataRefs); 
+        console.log("readRefResult " + util.inspect(readRefResult, { depth: null }));
+
+        // 3. Читаем и кэшируем структуры (делаем это один раз)
+        console.log('First read (with caching)...');
+        const firstRead = await client.readDataSetValues([
+            'WAGO61850ServerDevice/LLN0.DataSet01',
+            'WAGO61850ServerDevice/LLN0.DataSet02',
+            'WAGO61850ServerDevice/LLN0.DataSet03'
+        ]);
+        
+        console.log('First read completed, structures cached');
+        
+        // 4. Теперь можем использовать быстрый polling значений Dataset
+        console.log('\nStarting fast polling...');
+        
+        for (let i = 0; i < 10; i++) {
+            console.log(`\n--- Poll ${i+1} ---`);
+            
+            const startTime = Date.now();
+            
+            const pollResults = await client.pollDataSetValues([
+                'WAGO61850ServerDevice/LLN0.DataSet02'  // Быстрое чтение только значений
+            ]);
+            
+            const endTime = Date.now();
+            
+            pollResults.forEach((result, idx) => {
+                if (result.isValid) {
+                    console.log(`DataSet ${result.datasetRef}: ${result.count} values`);
+                    console.log(`  Read time: ${result.readTimeMicros} µs`);
+                    console.log(`  Process time: ${result.processTimeMicros} µs`);
+                    
+                    // Выводим значения
+                    Object.entries(result.values).forEach(([ref, value]) => {
+                        console.log(`  ${ref}:`, util.inspect(value, { depth: null }));
+                    });
+                } else {
+                    console.error(`Error: ${result.errorReason}`);
+                }
+            });
+            
+            console.log(`Total poll time: ${endTime - startTime} ms`);
+            
+            // Ждем перед следующим опросом
+            await sleep(1000);
+        }
+        
+    } catch (err) {
+        console.error('Error in handleConnectionOpened2:', err.message);
+    }
+}
+
+/*async function exploreModel() {
+    try {
+        console.log('\n=== 1. Получение корневых узлов ===');
+        const rootNodes = await client.browseDataModel();
+        
+        console.log('\nНайдено Logical Nodes:');
+        rootNodes.forEach((ln, index) => {
+            console.log(`\n${index + 1}. ${ln.name} (${ln.reference})`);
+            
+            // Выводим ВСЕ датасеты
+            if (ln.dataSets && ln.dataSets.length > 0) {
+                console.log(`   Datasets (${ln.dataSets.length}):`);
+                ln.dataSets.forEach((ds, idx) => {
+                    console.log(`     ${idx + 1}. ${ds.name}: ${ds.reference}`);
+                });
+            } else {
+                console.log(`   Datasets: 0`);
+            }
+            
+            // Выводим ВСЕ отчеты
+            if (ln.reports && ln.reports.length > 0) {
+                console.log(`   Reports (${ln.reports.length}):`);
+                ln.reports.forEach((report, idx) => {
+                    const typeDesc = report.type === 'RP' ? 'Unbuffered' : 'Buffered';
+                    console.log(`     ${idx + 1}. ${report.name} (${report.type} - ${typeDesc}): ${report.reference}`);
+                });
+            } else {
+                console.log(`   Reports: 0`);
+            }
+        });
+        
+        // Выбираем LLN0 для дальнейшего исследования
+        const lln0 = rootNodes.find(ln => ln.name === 'LLN0');
+        if (lln0) {
+            console.log('\n=== 2. Исследуем LLN0 ===');
+            const lln0Details = await client.browseDataModel(lln0.reference);
+            
+            console.log(`\nDataObjects в ${lln0Details.reference}: ${llln0Details.dataObjectsCount}`);
+            console.log(`DataSets в ${lln0Details.reference}: ${llln0Details.dataSetsCount}`);
+            
+            // Показываем ВСЕ DataObjects
+            console.log('\nВсе DataObjects:');
+            lln0Details.dataObjects.forEach((doObj, index) => {
+                console.log(`${index + 1}. ${doObj.name} (${doObj.cdc || 'Unknown'}) - ${doObj.reference}`);
+            });
+            
+            // Выбираем первый DataSet для кэширования
+            if (lln0Details.dataSets.length > 0) {
+                const firstDataSet = lln0Details.dataSets[0];
+                console.log(`\n=== 3. Кэшируем DataSet ${firstDataSet.reference} ===`);
+                const dsDetails = await client.browseDataModel(firstDataSet.reference);
+                
+                console.log(`DataSet ${dsDetails.reference}:`);
+                console.log(`  Удаляемый: ${dsDetails.isDeletable}`);
+                console.log(`  Членов: ${dsDetails.memberCount}`);
+                console.log('\n  Первые члены:');
+                dsDetails.members.slice(0, 5).forEach((member, index) => {
+                    console.log(`  ${index + 1}. ${member.reference}`);
+                });
+                
+                // Теперь можем быстро читать этот DataSet
+                console.log('\n=== 4. Быстрое чтение DataSet ===');
+                const pollResults = await client.pollDataSetValues([firstDataSet.reference]);
+                console.log('Poll results:', util.inspect(pollResults, { depth: 2 }));
+            }
+            
+            // Выбираем первый отчет для кэширования
+            if (lln0.reports.length > 0) {
+                const firstReport = lln0.reports.find(r => r.reference.includes('ReportBlock0101'));
+                if (firstReport) {
+                    console.log(`\n=== 5. Кэшируем отчет ${firstReport.reference} ===`);
+                    const reportDetails = await client.browseDataModel(firstReport.reference);
+                    
+                    console.log(`Отчет ${reportDetails.reference}:`);
+                    console.log(`  Тип: ${reportDetails.reportType}`);
+                    console.log(`  DataSet: ${reportDetails.datasetRef}`);
+                    console.log(`  Включен: ${reportDetails.enabled}`);
+                    console.log(`  Report ID: ${reportDetails.reportId}`);
+                    
+                    // Подписываемся на отчет
+                    console.log(`\n=== 6. Подписываемся на отчет ===`);
+                    await client.enableReporting(firstReport.reference, reportDetails.datasetRef);
+                }
+            }
+        }
+        
+        // Пример чтения одиночного значения
+        console.log('\n=== 7. Чтение одиночных значений ===');
+        const singleValues = await client.readData([
+            'WAGO61850ServerDevice/XCBR1.Pos[ST]',
+            'WAGO61850ServerDevice/GGIO1.Ind1[ST]'
+        ]);
+        console.log('Single values:', util.inspect(singleValues, { depth: 2 }));
+        
+    } catch (err) {
+        console.error('Error in exploreModel:', err.message);
+    }
+}*/
+
+async function exploreModel() {
+    try {
+        console.log('\n=== 1. Получение корневых узлов ===');
+        const rootNodes = await client.browseDataModel();
+        
+        console.log('\nНайдено Logical Nodes:');
+        rootNodes.forEach((ln, index) => {
+            console.log(`\n${index + 1}. ${ln.name} (${ln.reference})`);
+            
+            // Выводим ВСЕ датасеты
+            if (ln.dataSets && ln.dataSets.length > 0) {
+                console.log(`   Datasets (${ln.dataSets.length}):`);
+                ln.dataSets.forEach((ds, idx) => {
+                    console.log(`     ${idx + 1}. ${ds.name}: ${ds.reference}`);
+                });
+            } else {
+                console.log(`   Datasets: 0`);
+            }
+            
+            // Выводим ВСЕ отчеты
+            if (ln.reports && ln.reports.length > 0) {
+                console.log(`   Reports (${ln.reports.length}):`);
+                ln.reports.forEach((report, idx) => {
+                    const typeDesc = report.type === 'RP' ? 'Unbuffered' : 'Buffered';
+                    console.log(`     ${idx + 1}. ${report.name} (${report.type} - ${typeDesc}): ${report.reference}`);
+                });
+            } else {
+                console.log(`   Reports: 0`);
+            }
+        });
+        
+        // Выбираем LLN0 для дальнейшего исследования
+        const lln0 = rootNodes.find(ln => ln.name === 'LLN0');
+        if (lln0) {
+            console.log('\n=== 2. Исследуем LLN0 ===');
+            const lln0Details = await client.browseDataModel(lln0.reference);
+            
+            console.log(`\nDataObjects в ${lln0Details.reference}: ${lln0Details.dataObjectsCount}`);
+            console.log(`DataSets в ${lln0Details.reference}: ${lln0Details.dataSetsCount}`);
+            
+            // Показываем ВСЕ DataObjects
+            console.log('\nВсе DataObjects:');
+            lln0Details.dataObjects.forEach((doObj, index) => {
+                console.log(`${index + 1}. ${doObj.name} (${doObj.cdc || 'Unknown'}) - ${doObj.reference}`);
+            });
+            
+            // Выбираем первый DataSet для кэширования
+            if (lln0Details.dataSets.length > 0) {
+                const firstDataSet = lln0Details.dataSets[0];
+                console.log(`\n=== 3. Кэшируем DataSet ${firstDataSet.reference} ===`);
+                const dsDetails = await client.browseDataModel(firstDataSet.reference);
+                
+                console.log(`\nDataSet ${dsDetails.reference}:`);
+                console.log(`  Удаляемый: ${dsDetails.isDeletable}`);
+                console.log(`  Членов: ${dsDetails.memberCount}`);
+                console.log('\n  Все члены:');
+                dsDetails.members.forEach((member, index) => {
+                    console.log(`  ${index + 1}. ${member.reference}`);
+                });
+                
+                // Теперь можем быстро читать этот DataSet
+                console.log('\n=== 4. Быстрое чтение DataSet ===');
+                const pollResults = await client.pollDataSetValues([firstDataSet.reference]);
+                
+                console.log('\nPoll results:');
+                pollResults.forEach((result, idx) => {
+                    if (result.isValid) {
+                        console.log(`\nDataSet ${result.datasetRef}: ${result.count} значений`);
+                        console.log(`  Read time: ${result.readTimeMicros} µs`);
+                        console.log(`  Process time: ${result.processTimeMicros} µs`);
+                        
+                        // Выводим ВСЕ значения
+                        console.log('\n  Значения:');
+                        Object.entries(result.values).forEach(([ref, value], index) => {
+                            console.log(`  [${index + 1}] ${ref}:`, util.inspect(value, { 
+                                depth: null, 
+                                colors: true,
+                                maxArrayLength: 10
+                            }));
+                        });
+                    } else {
+                        console.error(`  Error: ${result.errorReason}`);
+                    }
+                });
+            }
+            
+            // Выбираем первый отчет для кэширования
+            if (lln0.reports.length > 0) {
+                const firstReport = lln0.reports.find(r => r.reference.includes('ReportBlock0101'));
+                if (firstReport) {
+                    console.log(`\n=== 5. Кэшируем отчет ${firstReport.reference} ===`);
+                    const reportDetails = await client.browseDataModel(firstReport.reference);
+                    
+                    console.log(`\nОтчет ${reportDetails.reference}:`);
+                    console.log(`  Тип: ${reportDetails.reportType}`);
+                    console.log(`  DataSet: ${reportDetails.datasetRef}`);
+                    console.log(`  Включен: ${reportDetails.enabled}`);
+                    console.log(`  Report ID: ${reportDetails.reportId || 'N/A'}`);
+                    console.log(`  Triggers: ${reportDetails.trgOps}`);
+                    console.log(`  Integrity Period: ${reportDetails.intgPd} ms`);
+                    console.log(`  Buffer Time: ${reportDetails.bufTm} ms`);
+                    console.log(`  GI: ${reportDetails.gi}`);
+                    
+                    // Подписываемся на отчет
+                    console.log(`\n=== 6. Подписываемся на отчет ===`);
+                    await client.enableReporting(firstReport.reference, reportDetails.datasetRef);
+                }
+            }
+        }
+        
+        // Пример чтения одиночного значения
+        console.log('\n=== 7. Чтение одиночных значений ===');
+        const singleValues = await client.readData([
+            'WAGO61850ServerDevice/XCBR1.Pos[ST]',
+            'WAGO61850ServerDevice/GGIO1.Ind1[ST]'
+        ]);
+        
+        console.log('\nSingle values:');
+        singleValues.forEach((result, index) => {
+            if (result.isValid) {
+                console.log(`[${index + 1}] ${result.dataRef}:`, util.inspect(result.value, { 
+                    depth: null, 
+                    colors: true 
+                }));
+            } else {
+                console.log(`[${index + 1}] ${result.dataRef}: ERROR - ${result.errorReason}`);
+            }
+        });
+        
+    } catch (err) {
+        console.error('Error in exploreModel:', err.message);
+        console.error(err.stack);
     }
 }
 
@@ -254,7 +726,7 @@ async function main() {
         console.log(`Disabling reporting for ${rcbRef}`);
         await client.disableReporting(rcbRef);*/
 
-        const rcbRef2 = 'WAGO61850ServerDevice/LLN0.RP.ReportBlock0201';
+        const rcbRef2 = 'WAGO61850ServerDevice/LLN0.RP.ReportBlock0101';
         console.log(`Disabling reporting for ${rcbRef2}`);
         await client.disableReporting(rcbRef2);
 
