@@ -424,7 +424,7 @@ async function handleConnectionOpened2() {
 
         // 3. Читаем и кэшируем структуры (делаем это один раз)
         console.log('First read (with caching)...');
-        const firstRead = await client.readDataSetValues([
+        const firstRead = await client.readDataSetModel([
             'WAGO61850ServerDevice/LLN0.DataSet01',
             'WAGO61850ServerDevice/LLN0.DataSet02',
             'WAGO61850ServerDevice/LLN0.DataSet03'
@@ -440,9 +440,7 @@ async function handleConnectionOpened2() {
             
             const startTime = Date.now();
             
-            const pollResults = await client.pollDataSetValues([
-                'WAGO61850ServerDevice/LLN0.DataSet02'  // Быстрое чтение только значений
-            ]);
+            const pollResults = await client.pollDataSetValues(['WAGO61850ServerDevice/LLN0.DataSet02']); // Быстрое чтение значений DataSet
             
             const endTime = Date.now();
             

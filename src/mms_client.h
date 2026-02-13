@@ -27,6 +27,7 @@ struct DataSetCache {
     std::unordered_map<std::string, StructureElementNames> structureCache;
 };
 
+
 class MmsClient : public Napi::ObjectWrap<MmsClient> {
 public:
     static Napi::Object Init(Napi::Env env, Napi::Object exports);
@@ -123,6 +124,11 @@ public:
 
     Napi::Value PollDataSetValues(const Napi::CallbackInfo& info);
 
+        // Доступ к кэшу DataSet для воркеров
+    const std::unordered_map<std::string, DataSetCache>& GetDataSetCache() const {
+        return datasetCache_;
+    }
+
 private:
     // Диагностические счетчики
     static std::atomic<int> totalReportsProcessed_;
@@ -143,7 +149,7 @@ private:
     static void ConnectionHandler(void* parameter, IedConnection connection, IedConnectionState state);
     static void ConnectionIndicationHandler(void* parameter, IedConnection connection, IedConnectionState newState);    
     Napi::Value ControlObject(const Napi::CallbackInfo& info);
-    Napi::Value ReadDataSetValues(const Napi::CallbackInfo& info);
+    Napi::Value ReadDataSetModel(const Napi::CallbackInfo& info);
     Napi::Value CreateDataSet(const Napi::CallbackInfo& info);
     Napi::Value DeleteDataSet(const Napi::CallbackInfo& info);
     Napi::Value GetDataSetDirectory(const Napi::CallbackInfo& info);
