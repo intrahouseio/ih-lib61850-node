@@ -124,6 +124,11 @@ public:
 
     Napi::Value PollDataSetValues(const Napi::CallbackInfo& info);
 
+        // Доступ к кэшу DataSet для воркеров
+    const std::unordered_map<std::string, DataSetCache>& GetDataSetCache() const {
+        return datasetCache_;
+    }
+
 private:
     // Диагностические счетчики
     static std::atomic<int> totalReportsProcessed_;

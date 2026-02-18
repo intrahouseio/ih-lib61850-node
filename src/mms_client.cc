@@ -56,7 +56,7 @@ namespace {
         std::vector<MmsClient::ResultData> values;
         int count;
     };
-
+    
     class ReadDataSetModelWorker : public Napi::AsyncWorker {
     public:
         ReadDataSetModelWorker(MmsClient* client,
@@ -106,6 +106,9 @@ namespace {
                     }
                     entry = LinkedList_getNext(entry);
                 }
+
+                // *** кэшируем имена членов DataSet ***
+                client_->CacheDataSetStructure(dsRef, res.memberRefs);
 
                 // 3. Читаем значения DataSet
                 ClientDataSet clientDataSet = IedConnection_readDataSetValues(
@@ -161,7 +164,7 @@ namespace {
         }
 
         void OnOK() override {
-            Napi::Env env = env_;  // Используем сохранённый env
+            Napi::Env env = env_;
             Napi::Array resultArray = Napi::Array::New(env, results_.size());
 
             for (size_t idx = 0; idx < results_.size(); ++idx) {

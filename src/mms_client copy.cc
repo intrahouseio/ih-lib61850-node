@@ -12,6 +12,7 @@
 #include <atomic>
 //#include <sys/resource.h>
 
+
 static Napi::Value ProcessStructureWithCache(Napi::Env env, MmsClient* client,
                                             const std::string& fullRef, 
                                             MmsValue* structVal,
@@ -44,184 +45,346 @@ struct ElementInfo {
     FunctionalConstraint fc;
 };
 
-// Структура для хранения результатов асинхронного чтения
-struct DataSetReadResult {
-    std::string datasetRef;
-    bool isValid;
-    std::string errorReason;
-    bool isDeletable;
-    std::vector<std::string> memberRefs;
-    std::vector<MmsClient::ResultData> values;
-    int count;
-};
+namespace {
+    // Структура для хранения результатов асинхронного чтения
+    struct DataSetReadResult {
+        std::string datasetRef;
+        bool isValid;
+        std::string errorReason;
+        bool isDeletable;
+        std::vector<std::string> memberRefs;
+        std::vector<MmsClient::ResultData> values;
+        int count;
+    };
+    
+    class ReadDataSetModelWorker : public Napi::AsyncWorker {
+    public:
+        ReadDataSetModelWorker(MmsClient* client,
+                            IedConnection connection,
+                            std::recursive_mutex& connMutex,
+                            Napi::Env env,
+                            const std::vector<std::string>& datasetRefs,
+                            Napi::Promise::Deferred deferred)
+            : Napi::AsyncWorker(env),
+            client_(client),
+            connection_(connection),
+            connMutex_(connMutex),
+            env_(env),
+            datasetRefs_(datasetRefs),
+            deferred_(deferred) {}
 
-class ReadDataSetModelWorker : public Napi::AsyncWorker {
-public:
-    ReadDataSetModelWorker(MmsClient* client,
-                          IedConnection connection,
-                          std::recursive_mutex& connMutex,
-                          Napi::Env env,
-                          const std::vector<std::string>& datasetRefs,
-                          Napi::Promise::Deferred deferred)
-        : Napi::AsyncWorker(env),
-          client_(client),
-          connection_(connection),
-          connMutex_(connMutex),
-          env_(env),
-          datasetRefs_(datasetRefs),
-          deferred_(deferred) {}
+        ~ReadDataSetModelWorker() {}
 
-    ~ReadDataSetModelWorker() {}
+        void Execute() override {
+            std::lock_guard<std::recursive_mutex> lock(connMutex_);
 
-    void Execute() override {
-        std::lock_guard<std::recursive_mutex> lock(connMutex_);
+            for (const auto& dsRef : datasetRefs_) {
+                DataSetReadResult res;
+                res.datasetRef = dsRef;
+                res.isValid = false;
+                res.count = 0;
 
-        for (const auto& dsRef : datasetRefs_) {
-            DataSetReadResult res;
-            res.datasetRef = dsRef;
-            res.isValid = false;
-            res.count = 0;
+                IedClientError error;
+                bool isDeletable = false;
 
-            IedClientError error;
-            bool isDeletable = false;
+                // 1. Получаем директорию DataSet
+                LinkedList members = IedConnection_getDataSetDirectory(
+                    connection_, &error, dsRef.c_str(), &isDeletable);
 
-            // 1. Получаем директорию DataSet
-            LinkedList members = IedConnection_getDataSetDirectory(
-                connection_, &error, dsRef.c_str(), &isDeletable);
-
-            if (error != IED_ERROR_OK || !members) {
-                res.errorReason = "Cannot get dataset directory, error: " + std::to_string(error);
-                results_.push_back(res);
-                continue;
-            }
-
-            // 2. Собираем ссылки на членов DataSet
-            LinkedList entry = members;
-            while (entry) {
-                if (entry->data) {
-                    char* memberRef = (char*)entry->data;
-                    res.memberRefs.push_back(std::string(memberRef));
+                if (error != IED_ERROR_OK || !members) {
+                    res.errorReason = "Cannot get dataset directory, error: " + std::to_string(error);
+                    results_.push_back(res);
+                    continue;
                 }
-                entry = LinkedList_getNext(entry);
-            }
 
-            // 3. Читаем значения DataSet
-            ClientDataSet clientDataSet = IedConnection_readDataSetValues(
-                connection_, &error, dsRef.c_str(), nullptr);
+                // 2. Собираем ссылки на членов DataSet
+                LinkedList entry = members;
+                while (entry) {
+                    if (entry->data) {
+                        char* memberRef = (char*)entry->data;
+                        res.memberRefs.push_back(std::string(memberRef));
+                    }
+                    entry = LinkedList_getNext(entry);
+                }
 
-            if (error != IED_ERROR_OK || !clientDataSet) {
-                res.errorReason = "Cannot read dataset values, error: " + std::to_string(error);
-                LinkedList_destroy(members);
-                results_.push_back(res);
-                continue;
-            }
+                // *** кэшируем имена членов DataSet ***
+                client_->CacheDataSetStructure(dsRef, res.memberRefs);
 
-            MmsValue* valuesArray = ClientDataSet_getValues(clientDataSet);
-            if (!valuesArray || MmsValue_getType(valuesArray) != MMS_ARRAY) {
-                res.errorReason = "Invalid dataset values format";
+                // 3. Читаем значения DataSet
+                ClientDataSet clientDataSet = IedConnection_readDataSetValues(
+                    connection_, &error, dsRef.c_str(), nullptr);
+
+                if (error != IED_ERROR_OK || !clientDataSet) {
+                    res.errorReason = "Cannot read dataset values, error: " + std::to_string(error);
+                    LinkedList_destroy(members);
+                    results_.push_back(res);
+                    continue;
+                }
+
+                MmsValue* valuesArray = ClientDataSet_getValues(clientDataSet);
+                if (!valuesArray || MmsValue_getType(valuesArray) != MMS_ARRAY) {
+                    res.errorReason = "Invalid dataset values format";
+                    ClientDataSet_destroy(clientDataSet);
+                    LinkedList_destroy(members);
+                    results_.push_back(res);
+                    continue;
+                }
+
+                int arraySize = MmsValue_getArraySize(valuesArray);
+                int elementsToProcess = std::min(arraySize, (int)res.memberRefs.size());
+                res.isValid = true;
+                res.isDeletable = isDeletable;
+                res.count = elementsToProcess;
+
+                // 4. Конвертируем каждое значение
+                for (int i = 0; i < elementsToProcess; ++i) {
+                    MmsValue* val = MmsValue_getElement(valuesArray, i);
+                    if (!val) continue;
+
+                    const std::string& fullRef = res.memberRefs[i];
+                    
+                    // Извлекаем имя атрибута из полной ссылки
+                    std::string attrName = fullRef;
+                    size_t lastDot = fullRef.rfind('.');
+                    if (lastDot != std::string::npos) {
+                        attrName = fullRef.substr(lastDot + 1);
+                    }
+
+                    // Быстрая конвертация MmsValue в ResultData
+                    MmsClient::ResultData rd = ConvertMmsValueForReportFast(val, attrName, 0);
+                    res.values.push_back(rd);
+                }
+
+                // 5. Освобождаем ресурсы
                 ClientDataSet_destroy(clientDataSet);
                 LinkedList_destroy(members);
-                results_.push_back(res);
-                continue;
-            }
-
-            int arraySize = MmsValue_getArraySize(valuesArray);
-            int elementsToProcess = std::min(arraySize, (int)res.memberRefs.size());
-            res.isValid = true;
-            res.isDeletable = isDeletable;
-            res.count = elementsToProcess;
-
-            // 4. Конвертируем каждое значение
-            for (int i = 0; i < elementsToProcess; ++i) {
-                MmsValue* val = MmsValue_getElement(valuesArray, i);
-                if (!val) continue;
-
-                const std::string& fullRef = res.memberRefs[i];
                 
-                // Извлекаем имя атрибута из полной ссылки
-                std::string attrName = fullRef;
-                size_t lastDot = fullRef.rfind('.');
-                if (lastDot != std::string::npos) {
-                    attrName = fullRef.substr(lastDot + 1);
+                results_.push_back(res);
+            }
+        }
+
+        void OnOK() override {
+            Napi::Env env = env_;
+            Napi::Array resultArray = Napi::Array::New(env, results_.size());
+
+            for (size_t idx = 0; idx < results_.size(); ++idx) {
+                DataSetReadResult& res = results_[idx];
+                Napi::Object obj = Napi::Object::New(env);
+                
+                obj.Set("datasetRef", Napi::String::New(env, res.datasetRef));
+                obj.Set("isValid", Napi::Boolean::New(env, res.isValid));
+
+                if (!res.isValid) {
+                    obj.Set("errorReason", Napi::String::New(env, res.errorReason));
+                    resultArray.Set(idx, obj);
+                    continue;
                 }
 
-                // Быстрая конвертация MmsValue в ResultData
-                MmsClient::ResultData rd = ConvertMmsValueForReportFast(val, attrName, 0);
-                res.values.push_back(rd);
-            }
+                obj.Set("isDeletable", Napi::Boolean::New(env, res.isDeletable));
+                obj.Set("count", Napi::Number::New(env, res.count));
 
-            // 5. Освобождаем ресурсы
-            ClientDataSet_destroy(clientDataSet);
-            LinkedList_destroy(members);
-            
-            results_.push_back(res);
-        }
-    }
+                Napi::Object valuesObj = Napi::Object::New(env);
+                Napi::Object memberRefsObj = Napi::Object::New(env);
 
-    void OnOK() override {
-        Napi::Env env = env_;  // Используем сохранённый env
-        Napi::Array resultArray = Napi::Array::New(env, results_.size());
+                for (size_t i = 0; i < res.values.size(); ++i) {
+                    MmsClient::ResultData rd = res.values[i];
+                    const std::string& fullRef = res.memberRefs[i];
 
-        for (size_t idx = 0; idx < results_.size(); ++idx) {
-            DataSetReadResult& res = results_[idx];
-            Napi::Object obj = Napi::Object::New(env);
-            
-            obj.Set("datasetRef", Napi::String::New(env, res.datasetRef));
-            obj.Set("isValid", Napi::Boolean::New(env, res.isValid));
+                    // Применяем кэшированные имена структур (если есть)
+                    if (rd.type == MMS_STRUCTURE) {
+                        EnhanceResultDataWithCachedNames(client_, rd, fullRef, 0);
+                    }
 
-            if (!res.isValid) {
-                obj.Set("errorReason", Napi::String::New(env, res.errorReason));
+                    // Конвертируем в Napi значение с именами
+                    Napi::Value jsValue = ResultDataToNapiWithNames(env, rd, fullRef);
+                    valuesObj.Set(fullRef, jsValue);
+                    memberRefsObj.Set(fullRef, Napi::String::New(env, fullRef));
+                }
+
+                obj.Set("values", valuesObj);
+                obj.Set("memberRefs", memberRefsObj);
+                
                 resultArray.Set(idx, obj);
-                continue;
             }
 
-            obj.Set("isDeletable", Napi::Boolean::New(env, res.isDeletable));
-            obj.Set("count", Napi::Number::New(env, res.count));
-
-            Napi::Object valuesObj = Napi::Object::New(env);
-            Napi::Object memberRefsObj = Napi::Object::New(env);
-
-            for (size_t i = 0; i < res.values.size(); ++i) {
-                MmsClient::ResultData rd = res.values[i];
-                const std::string& fullRef = res.memberRefs[i];
-
-                // Применяем кэшированные имена структур (если есть)
-                if (rd.type == MMS_STRUCTURE) {
-                    EnhanceResultDataWithCachedNames(client_, rd, fullRef, 0);
-                }
-
-                // Конвертируем в Napi значение с именами
-                Napi::Value jsValue = ResultDataToNapiWithNames(env, rd, fullRef);
-                valuesObj.Set(fullRef, jsValue);
-                memberRefsObj.Set(fullRef, Napi::String::New(env, fullRef));
-            }
-
-            obj.Set("values", valuesObj);
-            obj.Set("memberRefs", memberRefsObj);
-            
-            resultArray.Set(idx, obj);
+            deferred_.Resolve(resultArray);
         }
 
-        deferred_.Resolve(resultArray);
-    }
+        void OnError(const Napi::Error& e) override {
+            deferred_.Reject(e.Value());
+        }
 
-    void OnError(const Napi::Error& e) override {
-        deferred_.Reject(e.Value());
-    }
+    private:
+        MmsClient* client_;
+        IedConnection connection_;
+        std::recursive_mutex& connMutex_;
+        Napi::Env env_;
+        std::vector<std::string> datasetRefs_;
+        Napi::Promise::Deferred deferred_;
+        std::vector<DataSetReadResult> results_;
+    };
 
-private:
-    MmsClient* client_;
-    IedConnection connection_;
-    std::recursive_mutex& connMutex_;
-    Napi::Env env_;
-    std::vector<std::string> datasetRefs_;
-    Napi::Promise::Deferred deferred_;
-    std::vector<DataSetReadResult> results_;
-};
+    // Результат быстрого чтения одного DataSet (poll)
+    struct DataSetPollResult {
+        std::string datasetRef;
+        bool isValid = false;
+        std::string errorReason;
+        std::vector<MmsClient::ResultData> values;
+        std::vector<std::string> memberRefs;   // для восстановления имён
+        int count = 0;
+        uint64_t readTimeMicros = 0;
+        uint64_t processTimeMicros = 0;
+    };
 
+    // Асинхронный воркер для PollDataSetValues
+    class PollDataSetValuesWorker : public Napi::AsyncWorker {
+    public:
+        PollDataSetValuesWorker(MmsClient* client,
+                                IedConnection connection,
+                                std::recursive_mutex& connMutex,
+                                Napi::Env env,
+                                const std::vector<std::string>& datasetRefs,
+                                Napi::Promise::Deferred deferred)
+            : Napi::AsyncWorker(env),
+            client_(client),
+            connection_(connection),
+            connMutex_(connMutex),
+            env_(env),
+            datasetRefs_(datasetRefs),
+            deferred_(deferred) {}
 
-                                      
+        ~PollDataSetValuesWorker() {}
 
+        void Execute() override {
+            std::lock_guard<std::recursive_mutex> lock(connMutex_);
+
+            for (const auto& dsRef : datasetRefs_) {
+                DataSetPollResult res;
+                res.datasetRef = dsRef;
+                res.isValid = false;
+                res.count = 0;
+
+                // 1. Проверяем, есть ли DataSet в кэше
+                auto cacheIt = client_->GetDataSetCache().find(dsRef);
+                if (cacheIt == client_->GetDataSetCache().end()) {
+                    res.errorReason = "DataSet not cached. Please call readDataSetModel first.";
+                    results_.push_back(res);
+                    continue;
+                }
+
+                const DataSetCache& cache = cacheIt->second;
+                res.memberRefs = cache.memberRefs;   // сохраняем для имён
+
+                // 2. Читаем значения DataSet (один сетевой запрос)
+                auto readStart = std::chrono::steady_clock::now();
+
+                IedClientError error;
+                ClientDataSet clientDataSet = IedConnection_readDataSetValues(
+                    connection_, &error, dsRef.c_str(), nullptr);
+
+                auto readEnd = std::chrono::steady_clock::now();
+                res.readTimeMicros = std::chrono::duration_cast<std::chrono::microseconds>(readEnd - readStart).count();
+
+                if (error != IED_ERROR_OK || !clientDataSet) {
+                    res.errorReason = "Cannot read dataset values, error: " + std::to_string(error);
+                    results_.push_back(res);
+                    continue;
+                }
+
+                MmsValue* valuesArray = ClientDataSet_getValues(clientDataSet);
+                if (!valuesArray || MmsValue_getType(valuesArray) != MMS_ARRAY) {
+                    res.errorReason = "Invalid dataset values format";
+                    ClientDataSet_destroy(clientDataSet);
+                    results_.push_back(res);
+                    continue;
+                }
+
+                int arraySize = MmsValue_getArraySize(valuesArray);
+                int elementsToProcess = std::min(arraySize, (int)cache.memberRefs.size());
+
+                auto processStart = std::chrono::steady_clock::now();
+
+                for (int i = 0; i < elementsToProcess; ++i) {
+                    MmsValue* val = MmsValue_getElement(valuesArray, i);
+                    if (!val) continue;
+
+                    const std::string& fullRef = cache.memberRefs[i];
+                    std::string attrName = fullRef;
+                    size_t lastDot = fullRef.rfind('.');
+                    if (lastDot != std::string::npos) attrName = fullRef.substr(lastDot + 1);
+
+                    // Быстрая конвертация
+                    MmsClient::ResultData rd = ConvertMmsValueForReportFast(val, attrName, 0);
+                    res.values.push_back(rd);
+                }
+
+                auto processEnd = std::chrono::steady_clock::now();
+                res.processTimeMicros = std::chrono::duration_cast<std::chrono::microseconds>(processEnd - processStart).count();
+
+                res.isValid = true;
+                res.count = elementsToProcess;
+
+                ClientDataSet_destroy(clientDataSet);
+                results_.push_back(res);
+            }
+        }
+
+        void OnOK() override {
+            Napi::Env env = env_;
+            Napi::Array resultArray = Napi::Array::New(env, results_.size());
+
+            for (size_t idx = 0; idx < results_.size(); ++idx) {
+                DataSetPollResult& res = results_[idx];
+                Napi::Object obj = Napi::Object::New(env);
+                obj.Set("datasetRef", Napi::String::New(env, res.datasetRef));
+                obj.Set("isValid", Napi::Boolean::New(env, res.isValid));
+
+                if (!res.isValid) {
+                    obj.Set("errorReason", Napi::String::New(env, res.errorReason));
+                    resultArray.Set(idx, obj);
+                    continue;
+                }
+
+                obj.Set("count", Napi::Number::New(env, res.count));
+                obj.Set("readTimeMicros", Napi::Number::New(env, static_cast<double>(res.readTimeMicros)));
+                obj.Set("processTimeMicros", Napi::Number::New(env, static_cast<double>(res.processTimeMicros)));
+
+                Napi::Object valuesObj = Napi::Object::New(env);
+
+                for (size_t i = 0; i < res.values.size(); ++i) {
+                    MmsClient::ResultData rd = res.values[i];
+                    const std::string& fullRef = res.memberRefs[i];
+
+                    // Применяем кэшированные имена структур
+                    if (rd.type == MMS_STRUCTURE) {
+                        EnhanceResultDataWithCachedNames(client_, rd, fullRef, 0);
+                    }
+
+                    Napi::Value jsValue = ResultDataToNapiWithNames(env, rd, fullRef);
+                    valuesObj.Set(fullRef, jsValue);
+                }
+
+                obj.Set("values", valuesObj);
+                resultArray.Set(idx, obj);
+            }
+
+            deferred_.Resolve(resultArray);
+        }
+
+        void OnError(const Napi::Error& e) override {
+            deferred_.Reject(e.Value());
+        }
+
+    private:
+        MmsClient* client_;
+        IedConnection connection_;
+        std::recursive_mutex& connMutex_;
+        Napi::Env env_;
+        std::vector<std::string> datasetRefs_;
+        Napi::Promise::Deferred deferred_;
+        std::vector<DataSetPollResult> results_;
+    };
+} // анонимный namespace
 
 Napi::FunctionReference MmsClient::constructor;
 
@@ -2334,6 +2497,7 @@ Napi::Value MmsClient::ReadDataSetModel(const Napi::CallbackInfo& info) {
     return deferred.Promise();
 }
 
+// Асинхронная функция чтения значений DataSet методом поллинга
 Napi::Value MmsClient::PollDataSetValues(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
 
@@ -2342,7 +2506,7 @@ Napi::Value MmsClient::PollDataSetValues(const Napi::CallbackInfo& info) {
         return env.Null();
     }
 
-    std::vector<std::string> datasetRefs;    
+    std::vector<std::string> datasetRefs;
 
     if (info.Length() != 1 || (!info[0].IsString() && !info[0].IsArray())) {
         Napi::TypeError::New(env, "Expected string or array of strings").ThrowAsJavaScriptException();
@@ -2360,119 +2524,26 @@ Napi::Value MmsClient::PollDataSetValues(const Napi::CallbackInfo& info) {
         }
     }
 
-    std::lock_guard<std::recursive_mutex> lock(connMutex_);
-    Napi::Array results = Napi::Array::New(env, datasetRefs.size());
-
-    for (size_t dsIdx = 0; dsIdx < datasetRefs.size(); ++dsIdx) {
-        const std::string& datasetRef = datasetRefs[dsIdx];
-        
-        try {
-            // Пытаемся использовать быстрый метод
-            results.Set(dsIdx, ReadDataSetValuesFast(datasetRef, env));
-        } catch (const std::exception& e) {
-            // Если быстрый метод не сработал, возвращаем ошибку
-            printf("  ERROR in PollDataSetValues for %s: %s\n", datasetRef.c_str(), e.what());
-            
-            Napi::Object errorResult = Napi::Object::New(env);
-            errorResult.Set("datasetRef", Napi::String::New(env, datasetRef));
-            errorResult.Set("isValid", false);
-            errorResult.Set("errorReason", Napi::String::New(env, 
-                std::string("Fast read failed: ") + e.what()));
-            
-            results.Set(dsIdx, errorResult);
-        }
+    if (datasetRefs.empty()) {
+        Napi::TypeError::New(env, "No valid dataset references provided").ThrowAsJavaScriptException();
+        return env.Null();
     }
 
-    return results;
-}
+    // Создаём Promise
+    auto deferred = Napi::Promise::Deferred::New(env);
 
-// Быстрый метод чтения значений DataSet (предполагает, что структура уже закэширована)
-Napi::Value MmsClient::ReadDataSetValuesFast(const std::string& datasetRef, Napi::Env env) {
-    printf("=== FAST Read DataSet: %s ===\n", datasetRef.c_str());
-    
-    // Проверяем, есть ли DataSet в кэше
-    auto cacheIt = datasetCache_.find(datasetRef);
-    if (cacheIt == datasetCache_.end()) {
-        throw std::runtime_error("DataSet not cached. Please call readDataSetValues first.");
-    }
-    
-    DataSetCache& cache = cacheIt->second;
-    
-    printf("  Using cached structure for DataSet, member count: %zu\n", cache.memberRefs.size());
-    
-    IedClientError error;
-    
-    // 1. Читаем значения DataSet (единственный сетевой запрос)
-    auto startTime = std::chrono::steady_clock::now();
-    
-    ClientDataSet clientDataSet = IedConnection_readDataSetValues(connection_, &error, 
-                                                                datasetRef.c_str(), nullptr);
-    
-    if (error != IED_ERROR_OK || !clientDataSet) {
-        throw std::runtime_error("Cannot read dataset values, error: " + std::to_string(error));
-    }
-    
-    auto readTime = std::chrono::steady_clock::now();
-    auto readDuration = std::chrono::duration_cast<std::chrono::microseconds>(readTime - startTime);
-    
-    printf("  DataSet values read in %lld µs\n", readDuration.count());
-    
-    // 2. Получаем массив значений
-    MmsValue* valuesArray = ClientDataSet_getValues(clientDataSet);
-    if (!valuesArray || MmsValue_getType(valuesArray) != MMS_ARRAY) {
-        ClientDataSet_destroy(clientDataSet);
-        throw std::runtime_error("Invalid dataset values format");
-    }
-    
-    int arraySize = MmsValue_getArraySize(valuesArray);
-    
-    // 3. Быстро обрабатываем значения, используя кэш
-    Napi::Object result = Napi::Object::New(env);
-    result.Set("datasetRef", Napi::String::New(env, datasetRef));
-    
-    Napi::Object valuesObj = Napi::Object::New(env);
-    
-    const int elementsToProcess = std::min(arraySize, static_cast<int>(cache.memberRefs.size()));
-    
-    for (int i = 0; i < elementsToProcess; ++i) {
-        MmsValue* val = MmsValue_getElement(valuesArray, i);
-        if (!val) {
-            continue;
-        }
-        
-        const std::string& fullRef = cache.memberRefs[i];
-        
-        // Извлекаем имя атрибута
-        std::string attrName = fullRef;
-        size_t lastDot = fullRef.rfind('.');
-        if (lastDot != std::string::npos) {
-            attrName = fullRef.substr(lastDot + 1);
-        }
-        
-        // Используем быструю конвертацию с кэшем
-        valuesObj.Set(fullRef, SafeConvertMmsValue(env, connection_, this, fullRef, val, attrName, 0));
-    }
-    
-    auto processTime = std::chrono::steady_clock::now();
-    auto processDuration = std::chrono::duration_cast<std::chrono::microseconds>(processTime - readTime);
-    
-    printf("  Values processed in %lld µs\n", processDuration.count());
-    
-    result.Set("isValid", true);
-    result.Set("values", valuesObj);
-    result.Set("count", Napi::Number::New(env, elementsToProcess));
-    result.Set("readTimeMicros", Napi::Number::New(env, static_cast<double>(readDuration.count())));
-    result.Set("processTimeMicros", Napi::Number::New(env, static_cast<double>(processDuration.count())));
-    
-    // 4. Освобождаем ресурсы
-    ClientDataSet_destroy(clientDataSet);
-    
-    auto totalTime = std::chrono::steady_clock::now();
-    auto totalDuration = std::chrono::duration_cast<std::chrono::microseconds>(totalTime - startTime);
-    
-    printf("=== FAST Read completed in %lld µs ===\n\n", totalDuration.count());
-    
-    return result;
+    // Создаём и запускаем асинхронный воркер
+    PollDataSetValuesWorker* worker = new PollDataSetValuesWorker(
+        this,
+        connection_,
+        connMutex_,
+        env,
+        datasetRefs,
+        deferred
+    );
+
+    worker->Queue();
+    return deferred.Promise();
 }
 
 // Функция для получения корневых узлов
