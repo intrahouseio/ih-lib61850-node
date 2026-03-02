@@ -1255,8 +1255,7 @@ static Napi::Value ProcessStructureWithCache(Napi::Env env, MmsClient* client,
     }
     
     int structSize = MmsValue_getArraySize(structVal);
-    printf("    Processing structure with cache %s (size=%d, fc=%d, depth=%d)\n",
-           cleanRef.c_str(), structSize, fc, recursionDepth);
+    //printf("    Processing structure with cache %s (size=%d, fc=%d, depth=%d)\n", cleanRef.c_str(), structSize, fc, recursionDepth);
     
     // Ключевое изменение: передаем cleanRef, а не fullRef
     std::vector<std::string> elementNames;
@@ -1267,8 +1266,7 @@ static Napi::Value ProcessStructureWithCache(Napi::Env env, MmsClient* client,
     }
     
     if (hasCachedNames && elementNames.size() == static_cast<size_t>(structSize)) {
-        printf("    SUCCESS: Using cached element names for %s (count: %zu)\n", 
-               cleanRef.c_str(), elementNames.size());
+        //printf("    SUCCESS: Using cached element names for %s (count: %zu)\n", cleanRef.c_str(), elementNames.size());
         
         for (int i = 0; i < structSize; ++i) {
             MmsValue* element = MmsValue_getElement(structVal, i);
@@ -1379,8 +1377,7 @@ static Napi::Value ProcessMmsValueWithCache(Napi::Env env, MmsClient* client,
     
     // Если это структура, используем функцию с кэшем
     if (type == MMS_STRUCTURE) {
-        printf("    Processing structure with cache %s (depth: %d)\n", 
-               elementRef.c_str(), recursionDepth);
+        //printf("    Processing structure with cache %s (depth: %d)\n", elementRef.c_str(), recursionDepth);
         return ProcessStructureWithCache(env, client, elementRef, val, recursionDepth);
     }
     
@@ -1444,16 +1441,16 @@ MmsClient::MmsClient(const Napi::CallbackInfo& info) : Napi::ObjectWrap<MmsClien
 
 MmsClient::~MmsClient() {
     printf("\n=== MmsClient Destructor ===\n");
-    printf("  Thread ID: %zu\n", std::hash<std::thread::id>{}(std::this_thread::get_id()));
-    printf("  clientID: %s\n", clientID_.c_str());
+    //printf("  Thread ID: %zu\n", std::hash<std::thread::id>{}(std::this_thread::get_id()));
+    //printf("  clientID: %s\n", clientID_.c_str());
     
     std::lock_guard<std::recursive_mutex> lock(connMutex_);
-    printf("  Inside destructor lock:\n");
-    printf("    connected_ = %d\n", connected_);
-    printf("    running_ = %d\n", running_);
-    printf("    isClosing_ = %d\n", isClosing_);
-    printf("    connection pointer = %p\n", (void*)connection_);
-    printf("    active reports = %zu\n", activeReports_.size());
+    //printf("  Inside destructor lock:\n");
+    //printf("    connected_ = %d\n", connected_);
+    //printf("    running_ = %d\n", running_);
+    //printf("    isClosing_ = %d\n", isClosing_);
+    //printf("    connection pointer = %p\n", (void*)connection_);
+    //printf("    active reports = %zu\n", activeReports_.size());
     
     // Если клиент еще не закрыт корректно, делаем это сейчас
     if (running_ || connected_) {
@@ -1847,36 +1844,33 @@ Napi::Value MmsClient::Close(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
     Napi::Promise::Deferred deferred = Napi::Promise::Deferred::New(env);
     
-    printf("\n=== MmsClient::Close() called from JavaScript ===\n");
-    printf("  Thread ID: %zu (main thread? %s)\n", 
-           std::hash<std::thread::id>{}(std::this_thread::get_id()),
-           (std::this_thread::get_id() == std::thread::id()) ? "YES" : "NO");
-    printf("  clientID: %s\n", clientID_.c_str());
+    //printf("\n=== MmsClient::Close() called from JavaScript ===\n");
+    //printf("  Thread ID: %zu (main thread? %s)\n", std::hash<std::thread::id>{}(std::this_thread::get_id()), (std::this_thread::get_id() == std::thread::id()) ? "YES" : "NO");
+    //printf("  clientID: %s\n", clientID_.c_str());
     
     try {
         {
             std::lock_guard<std::recursive_mutex> lock(connMutex_);
-            printf("  Inside lock: connected_=%d, running_=%d, isClosing_=%d\n",
-                   connected_, running_, isClosing_);
-            printf("  Connection pointer: %p\n", (void*)connection_);
+            //printf("  Inside lock: connected_=%d, running_=%d, isClosing_=%d\n", connected_, running_, isClosing_);
+            //printf("  Connection pointer: %p\n", (void*)connection_);
             
             // Проверяем, не закрываем ли уже
             if (isClosing_) {
-                printf("  WARNING: Already closing, ignoring duplicate call\n");
+                //printf("  WARNING: Already closing, ignoring duplicate call\n");
                 deferred.Resolve(Napi::Boolean::New(env, false));
                 return deferred.Promise();
             }
             
             isClosing_ = true;
-            printf("  Set isClosing_=true\n");
+            //printf("  Set isClosing_=true\n");
             
             if (running_) {
                 running_ = false;
-                printf("  Set running_=false\n");
+                //printf("  Set running_=false\n");
                 
                 if (connected_) {
-                    printf("  *** CLOSING ACTIVE CONNECTION ***\n");
-                    printf("  Calling IedConnection_close() on %p...\n", (void*)connection_);
+                    //printf("  *** CLOSING ACTIVE CONNECTION ***\n");
+                    //printf("  Calling IedConnection_close() on %p...\n", (void*)connection_);
                     
                     // Сохраняем состояние до закрытия
                     IedConnectionState beforeClose = IED_STATE_CLOSED;
@@ -1903,83 +1897,83 @@ Napi::Value MmsClient::Close(const Napi::CallbackInfo& info) {
                     
                     // Затем закрываем соединение
                     IedConnection_close(connection_);
-                    printf("  IedConnection_close() completed\n");
+                    //printf("  IedConnection_close() completed\n");
                     
                     connected_ = false;
-                    printf("  Set connected_=false\n");
+                    //printf("  Set connected_=false\n");
                     
                     // Проверяем состояние после закрытия
                     if (connection_) {
                         IedConnectionState afterClose = IedConnection_getState(connection_);
-                        printf("  State after close: %d\n", afterClose);
+                        //printf("  State after close: %d\n", afterClose);
                     }
                 } else {
-                    printf("  Already disconnected, skipping IedConnection_close()\n");
+                    //printf("  Already disconnected, skipping IedConnection_close()\n");
                 }
             } else {
-                printf("  Client not running, no connection to close\n");
+                //printf("  Client not running, no connection to close\n");
             }
         }
         
-        printf("  Waiting for connection thread to finish...\n");
+        //printf("  Waiting for connection thread to finish...\n");
         if (thread_.joinable()) {
-            printf("  Thread joinable, calling join()...\n");
+            //printf("  Thread joinable, calling join()...\n");
             thread_.join();
-            printf("  Thread joined successfully\n");
+            //printf("  Thread joined successfully\n");
         } else {
-            printf("  Thread not joinable\n");
+            //printf("  Thread not joinable\n");
         }
         
         {
             std::lock_guard<std::recursive_mutex> lock(connMutex_);
-            printf("  Cleaning up resources...\n");
+            //printf("  Cleaning up resources...\n");
             
             // Освобождаем ресурсы отчетов
-            printf("  Active reports to clean up: %zu\n", activeReports_.size());
+            //printf("  Active reports to clean up: %zu\n", activeReports_.size());
             for (auto& [rcbRef, reportInfo] : activeReports_) {
-                printf("    Cleaning up report: %s\n", rcbRef.c_str());
+                //printf("    Cleaning up report: %s\n", rcbRef.c_str());
                 if (reportInfo.rcb) {
                     ClientReportControlBlock_destroy(reportInfo.rcb);
                     reportInfo.rcb = nullptr;
-                    printf("      Destroyed RCB\n");
+                    //printf("      Destroyed RCB\n");
                 }
                 if (reportInfo.dataSet) {
                     ClientDataSet_destroy(reportInfo.dataSet);
                     reportInfo.dataSet = nullptr;
-                    printf("      Destroyed DataSet\n");
+                    //printf("      Destroyed DataSet\n");
                 }
                 // dataSetMembers и structureElementNamesCache очистятся автоматически
             }
             activeReports_.clear();
-            printf("  All reports cleaned up\n");
+            //printf("  All reports cleaned up\n");
             
             // Очищаем кэш
-            printf("  Dataset cache entries: %zu\n", datasetCache_.size());
+            //printf("  Dataset cache entries: %zu\n", datasetCache_.size());
             datasetCache_.clear();
-            printf("  Dataset cache cleared\n");
+            //printf("  Dataset cache cleared\n");
             
             // Уничтожаем соединение
             if (connection_) {
-                printf("  Destroying connection at %p...\n", (void*)connection_);
+                //printf("  Destroying connection at %p...\n", (void*)connection_);
                 IedConnection_destroy(connection_);
                 connection_ = nullptr;
-                printf("  Connection destroyed\n");
+                //printf("  Connection destroyed\n");
             } else {
-                printf("  Connection already null\n");
+                //printf("  Connection already null\n");
             }
             
             // Освобождаем TSFN
             if (tsfn_) {
-                printf("  Releasing TSFN...\n");
+                //printf("  Releasing TSFN...\n");
                 tsfn_.Release();
                 tsfn_ = Napi::ThreadSafeFunction();
-                printf("  TSFN released\n");
+                //printf("  TSFN released\n");
             } else {
-                printf("  TSFN already null\n");
+                //printf("  TSFN already null\n");
             }
         }
         
-        printf("=== MmsClient::Close() completed successfully ===\n\n");
+        //printf("=== MmsClient::Close() completed successfully ===\n\n");
         deferred.Resolve(Napi::Boolean::New(env, true));
     } catch (const std::exception& e) {
         printf("  EXCEPTION in Close: %s, clientID: %s\n", e.what(), clientID_.c_str());
@@ -3491,8 +3485,7 @@ Napi::Value MmsClient::ReadData(const Napi::CallbackInfo& info) {
             fc = ParseFCFromString(fcStr);
             actualRef = ref.substr(0, bracketPos);
             
-            printf("ReadData: Parsed ref '%s' -> actualRef='%s', fc=%d\n", 
-                   ref.c_str(), actualRef.c_str(), fc);
+            //printf("ReadData: Parsed ref '%s' -> actualRef='%s', fc=%d\n", ref.c_str(), actualRef.c_str(), fc);
         }
         
         // Пытаемся прочитать значение с указанным FC
@@ -3517,8 +3510,7 @@ Napi::Value MmsClient::ReadData(const Napi::CallbackInfo& info) {
                 value = IedConnection_readObject(connection_, &error, actualRef.c_str(), tryFc);
                 if (error == IED_ERROR_OK && value) {
                     fc = tryFc;
-                    printf("ReadData: Success with alternative FC=%d for '%s'\n", 
-                           fc, actualRef.c_str());
+                    //printf("ReadData: Success with alternative FC=%d for '%s'\n", fc, actualRef.c_str());
                     break;
                 }
             }
