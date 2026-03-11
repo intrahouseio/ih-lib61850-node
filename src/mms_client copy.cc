@@ -402,7 +402,7 @@ void MmsClient::CheckConnectionHealth() {
     
     // Проверяем состояние соединения
     IedConnectionState state = IedConnection_getState(connection_);
-    printf("[Health Check] Connection state: %d\n", state);
+    //printf("[Health Check] Connection state: %d\n", state);
     
     // Если соединение активно более 30 секунд, отправляем тестовый запрос
     static auto lastHealthCheckTime = std::chrono::steady_clock::now();
@@ -410,7 +410,7 @@ void MmsClient::CheckConnectionHealth() {
     auto timeSinceLastCheck = std::chrono::duration_cast<std::chrono::seconds>(now - lastHealthCheckTime);
     
     if (timeSinceLastCheck.count() > 30) {
-        printf("[Health Check] Sending test request to keep connection alive...\n");
+        //printf("[Health Check] Sending test request to keep connection alive...\n");
         lastHealthCheckTime = now;
         
         // Попробуем прочитать простой атрибут для поддержания активности
@@ -419,16 +419,16 @@ void MmsClient::CheckConnectionHealth() {
             "WAGO61850ServerDevice/LLN0.Beh[ST]", IEC61850_FC_ST);
         
         if (error == IED_ERROR_OK && value) {
-            printf("[Health Check] Test request successful\n");
+            //printf("[Health Check] Test request successful\n");
             MmsValue_delete(value);
         } else {
-            printf("[Health Check] Test request failed, error: %d\n", error);
+            //printf("[Health Check] Test request failed, error: %d\n", error);
         }
     }
 }
 
 static void LogNetworkErrorDetailed(IedClientError error) {
-    printf("[Network Error] Code: %d, Description: ", error);
+    //printf("[Network Error] Code: %d, Description: ", error);
     
     switch (error) {
         case IED_ERROR_OK: 
@@ -475,7 +475,7 @@ static void LogNetworkErrorDetailed(IedClientError error) {
     // Добавляем время ошибки
     auto now = std::chrono::system_clock::now();
     auto time_t_now = std::chrono::system_clock::to_time_t(now);
-    printf("[Network Error] Time: %s", std::ctime(&time_t_now));
+    //printf("[Network Error] Time: %s", std::ctime(&time_t_now));
 }
 
 // Упрощенная структура для хранения имен элементов (без типов)
@@ -623,13 +623,11 @@ static void CacheStructureElementNames(IedConnection connection,
     
     const int MAX_CACHE_DEPTH = 5;
     if (recursionDepth > MAX_CACHE_DEPTH) {
-        printf("    [NameCache-%d] Max cache depth reached for %s\n", 
-               recursionDepth, baseRef.c_str());
+        //printf("    [NameCache-%d] Max cache depth reached for %s\n", recursionDepth, baseRef.c_str());
         return;
     }
     
-    printf("    [NameCache-%d] Caching structure names for: %s (FC=%d)\n", 
-           recursionDepth, baseRef.c_str(), fc);
+    //printf("    [NameCache-%d] Caching structure names for: %s (FC=%d)\n", recursionDepth, baseRef.c_str(), fc);
     
     // Создаем ключ для кэша
     std::string fcStr;
@@ -658,7 +656,7 @@ static void CacheStructureElementNames(IedConnection connection,
     // Проверяем, не кэшировали ли уже
     if (reportInfo.structureElementNamesCache.find(cacheKey) != 
         reportInfo.structureElementNamesCache.end()) {
-        printf("    [NameCache-%d] Already cached: %s\n", recursionDepth, cacheKey.c_str());
+        //printf("    [NameCache-%d] Already cached: %s\n", recursionDepth, cacheKey.c_str());
         return;
     }
     
@@ -668,8 +666,7 @@ static void CacheStructureElementNames(IedConnection connection,
         connection, &error, baseRef.c_str(), fc);
     
     if (error != IED_ERROR_OK || spec == nullptr) {
-        printf("    [NameCache-%d] FAILED to get var spec for %s, error: %d\n", 
-               recursionDepth, baseRef.c_str(), error);
+        //printf("    [NameCache-%d] FAILED to get var spec for %s, error: %d\n", recursionDepth, baseRef.c_str(), error);
         return;
     }
     
@@ -677,7 +674,7 @@ static void CacheStructureElementNames(IedConnection connection,
     
     if (type == MMS_STRUCTURE) {
         int size = MmsVariableSpecification_getSize(spec);
-        printf("    [NameCache-%d] Structure size: %d\n", recursionDepth, size);
+        //printf("    [NameCache-%d] Structure size: %d\n", recursionDepth, size);
         
         std::vector<std::string> elementNames;
         
@@ -692,8 +689,7 @@ static void CacheStructureElementNames(IedConnection connection,
                 
                 if (name != nullptr) {
                     elementNames.push_back(std::string(name));
-                    printf("    [NameCache-%d]   Child %d: %s, type=%d\n", 
-                           recursionDepth, i, name, childType);
+                    //printf("    [NameCache-%d]   Child %d: %s, type=%d\n", recursionDepth, i, name, childType);
                     
                     // Рекурсивно кэшируем вложенные структуры
                     if (childType == MMS_STRUCTURE) {
@@ -707,8 +703,7 @@ static void CacheStructureElementNames(IedConnection connection,
         
         // Сохраняем в кэш отчета
         reportInfo.structureElementNamesCache[cacheKey] = elementNames;
-        printf("    [NameCache-%d] Cached %zu element names for %s\n", 
-               recursionDepth, elementNames.size(), cacheKey.c_str());
+        //printf("    [NameCache-%d] Cached %zu element names for %s\n", recursionDepth, elementNames.size(), cacheKey.c_str());
     }
     
     MmsVariableSpecification_destroy(spec);
@@ -716,7 +711,7 @@ static void CacheStructureElementNames(IedConnection connection,
 
 // Упрощенная функция для быстрой конвертации MMS значений
 static MmsClient::ResultData ConvertMmsValueForReportFast(MmsValue* val, const std::string& attrName, int depth = 0) {
-    printf("    ConvertMmsValueForReportFast: attrName='%s', MMS type=%d\n", attrName.c_str(), MmsValue_getType(val));
+    //printf("    ConvertMmsValueForReportFast: attrName='%s', MMS type=%d\n", attrName.c_str(), MmsValue_getType(val));
 
     MmsClient::ResultData data;
     
@@ -773,8 +768,7 @@ static MmsClient::ResultData ConvertMmsValueForReportFast(MmsValue* val, const s
                         default: data.stringValue = "unknown(" + std::to_string(intVal) + ")";
                     }
                     // Для отладки:
-                    printf("    [DPC-stVal] attrName='%s', intValue=%lld, stringValue='%s'\n", 
-                        attrName.c_str(), data.intValue, data.stringValue.c_str());
+                    //printf("    [DPC-stVal] attrName='%s', intValue=%lld, stringValue='%s'\n", attrName.c_str(), data.intValue, data.stringValue.c_str());
                 }
                 break;
             case MMS_BOOLEAN:
@@ -798,12 +792,11 @@ static MmsClient::ResultData ConvertMmsValueForReportFast(MmsValue* val, const s
                 int bitSize = MmsValue_getBitStringSize(val);
                 
                 // 1. Общий отладочный вывод для всех битовых строк
-                printf("    [BitString] attrName='%s', bits=%u (0x%X), size=%d\n", 
-                    attrName.c_str(), bits, bits, bitSize);
+                //printf("    [BitString] attrName='%s', bits=%u (0x%X), size=%d\n", attrName.c_str(), bits, bits, bitSize);
                 
                 // 2. ПРЯМОЕ СОПОСТАВЛЕНИЕ: если attrName ТОЧНО РАВЕН "stVal"
                 if (attrName == "stVal" && bitSize == 2) {
-                    printf("    [Прямое сопоставление stVal] Найдено по имени.\n");
+                    //printf("    [Прямое сопоставление stVal] Найдено по имени.\n");
                     uint32_t msbValue = 0;
                     uint32_t lsbValue = bits;
                     for (int i = 0; i < 2; i++) {
@@ -818,8 +811,7 @@ static MmsClient::ResultData ConvertMmsValueForReportFast(MmsValue* val, const s
                         case 3: data.stringValue = "bad-state"; break;
                         default: data.stringValue = "unknown(" + std::to_string(msbValue) + ")";
                     }
-                    printf("    [DPC] Преобразованное: intValue=%lld, stringValue='%s'\n", 
-                        data.intValue, data.stringValue.c_str());
+                    //printf("    [DPC] Преобразованное: intValue=%lld, stringValue='%s'\n", data.intValue, data.stringValue.c_str());
                 }
                 // 3. ЭВРИСТИКА ДЛЯ ОТЧЕТОВ: если имя - цифра, это может быть индекс внутри структуры
                 //    Проверяем, является ли attrName одной цифрой (например, '0', '1').
@@ -828,7 +820,7 @@ static MmsClient::ResultData ConvertMmsValueForReportFast(MmsValue* val, const s
                     
                     // Индекс 0 в структуре статуса [ST] - это stVal (DPC, 2 бита)
                     if (index == 0 && bitSize == 2) {
-                        printf("    [Эвристика] Обнаружен вероятный stVal по индексу 0 в структуре.\n");
+                        //printf("    [Эвристика] Обнаружен вероятный stVal по индексу 0 в структуре.\n");
                         uint32_t msbValue = 0;
                         uint32_t lsbValue = bits;
                         for (int i = 0; i < 2; i++) {
@@ -843,12 +835,11 @@ static MmsClient::ResultData ConvertMmsValueForReportFast(MmsValue* val, const s
                             case 3: data.stringValue = "bad-state"; break;
                             default: data.stringValue = "unknown(" + std::to_string(msbValue) + ")";
                         }
-                        printf("    [DPC] Преобразованное: intValue=%lld, stringValue='%s'\n", 
-                            data.intValue, data.stringValue.c_str());
+                        //printf("    [DPC] Преобразованное: intValue=%lld, stringValue='%s'\n", data.intValue, data.stringValue.c_str());
                     }
                     // Индекс 1 - это качество 'q' (оставляем как битовую строку-число)
                     else if (index == 1) {
-                        printf("    [Эвристика] Обнаружено качество (q) по индексу 1. Значение: %u\n", bits);
+                        //printf("    [Эвристика] Обнаружено качество (q) по индексу 1. Значение: %u\n", bits);
                         // Для q оставляем data.intValue = bits (битовая строка как число)
                         // data.stringValue остаётся пустой
                     }
@@ -911,7 +902,7 @@ static FunctionalConstraint ParseFCFromString(const std::string& fcStr) {
     std::string upperFcStr = fcStr;
     std::transform(upperFcStr.begin(), upperFcStr.end(), upperFcStr.begin(), ::toupper);
     
-    printf("    ParseFCFromString: input='%s', upper='%s'\n", fcStr.c_str(), upperFcStr.c_str());
+    //printf("    ParseFCFromString: input='%s', upper='%s'\n", fcStr.c_str(), upperFcStr.c_str());
 
     if (upperFcStr == "ST" || upperFcStr == "0") return IEC61850_FC_ST;
     else if (upperFcStr == "MX" || upperFcStr == "1") return IEC61850_FC_MX;
@@ -946,41 +937,36 @@ static void RecursiveCacheStructureElements(IedConnection connection,
     
     const int MAX_CACHE_DEPTH = 5;
     if (recursionDepth > MAX_CACHE_DEPTH) {
-        printf("    [Cache-%d] Max cache depth reached for %s\n", 
-               recursionDepth, baseRef.c_str());
+    //    printf("    [Cache-%d] Max cache depth reached for %s\n", recursionDepth, baseRef.c_str());
         return;
     }
     
-    printf("    [Cache-%d] START for: %s (FC=%d)\n", 
-           recursionDepth, baseRef.c_str(), fc);
+    //printf("    [Cache-%d] START for: %s (FC=%d)\n", recursionDepth, baseRef.c_str(), fc);
     
     // Получаем спецификацию
     IedClientError error;
-    printf("    [Cache-%d] Calling IedConnection_getVariableSpecification...\n", recursionDepth);
-    MmsVariableSpecification* spec = IedConnection_getVariableSpecification(
-        connection, &error, baseRef.c_str(), fc);
+    //printf("    [Cache-%d] Calling IedConnection_getVariableSpecification...\n", recursionDepth);
+    MmsVariableSpecification* spec = IedConnection_getVariableSpecification(connection, &error, baseRef.c_str(), fc);
     
     if (error != IED_ERROR_OK || spec == nullptr) {
-        printf("    [Cache-%d] FAILED to get var spec for %s, error: %d\n", 
-               recursionDepth, baseRef.c_str(), error);
+    //    printf("    [Cache-%d] FAILED to get var spec for %s, error: %d\n", recursionDepth, baseRef.c_str(), error);
         return;
     }
     
-    printf("    [Cache-%d] Got var spec, type=%d\n", 
-           recursionDepth, MmsVariableSpecification_getType(spec));
+    //printf("    [Cache-%d] Got var spec, type=%d\n", recursionDepth, MmsVariableSpecification_getType(spec));
     
     int type = MmsVariableSpecification_getType(spec);
     
     if (type == MMS_STRUCTURE) {
         int size = MmsVariableSpecification_getSize(spec);
-        printf("    [Cache-%d] Structure size: %d\n", recursionDepth, size);
+        //printf("    [Cache-%d] Structure size: %d\n", recursionDepth, size);
         
         std::vector<std::string> elementNames;
         std::vector<MmsType> elementTypes;
         std::vector<std::pair<std::string, MmsType>> childInfo;
         
         for (int i = 0; i < size; i++) {
-            printf("    [Cache-%d] Processing child %d...\n", recursionDepth, i);
+            //printf("    [Cache-%d] Processing child %d...\n", recursionDepth, i);
             
             MmsVariableSpecification* childSpec = 
                 MmsVariableSpecification_getChildSpecificationByIndex(spec, i);
@@ -995,17 +981,16 @@ static void RecursiveCacheStructureElements(IedConnection connection,
                     elementTypes.push_back(childType);
                     childInfo.push_back({std::string(name), childType});
                     
-                    printf("    [Cache-%d]   Child %d: %s, type=%d\n", 
-                           recursionDepth, i, name, childType);
+                    //printf("    [Cache-%d]   Child %d: %s, type=%d\n", recursionDepth, i, name, childType);
                 } else {
-                    printf("    [Cache-%d]   Child %d: name is NULL\n", recursionDepth, i);
+                    //printf("    [Cache-%d]   Child %d: name is NULL\n", recursionDepth, i);
                 }
             } else {
-                printf("    [Cache-%d]   Child %d: spec is NULL\n", recursionDepth, i);
+                //printf("    [Cache-%d]   Child %d: spec is NULL\n", recursionDepth, i);
             }
         }
         
-        printf("    [Cache-%d] Collected %zu children\n", recursionDepth, childInfo.size());
+        //printf("    [Cache-%d] Collected %zu children\n", recursionDepth, childInfo.size());
         
         // Кэшируем текущий уровень
        if (!elementNames.empty()) {
@@ -1032,39 +1017,35 @@ static void RecursiveCacheStructureElements(IedConnection connection,
         else fcStr = std::to_string(fc);
 
         std::string refWithFc = baseRef + "[" + fcStr + "]";
-        printf("    [CacheStore] Storing with key: %s (FC=%d as '%s')\n", 
-               refWithFc.c_str(), fc, fcStr.c_str());
+        //printf("    [CacheStore] Storing with key: %s (FC=%d as '%s')\n", refWithFc.c_str(), fc, fcStr.c_str());
         
         // УБЕДИТЕСЬ, что этот вызов выполняется (не закомментирован):
         std::lock_guard<std::recursive_mutex> lock(client->GetMutex());           
         client->CacheStructureElements(refWithFc, fc, elementNames, elementTypes);
-        printf("    [Cache-%d] CacheStructureElements CALLED for %s\n", 
-               recursionDepth, refWithFc.c_str());
+        //printf("    [Cache-%d] CacheStructureElements CALLED for %s\n", recursionDepth, refWithFc.c_str());
         }
         
-        printf("    [Cache-%d] Checking for recursive structures...\n", recursionDepth);
+        //printf("    [Cache-%d] Checking for recursive structures...\n", recursionDepth);
         // Рекурсивные вызовы
         for (const auto& [childName, childType] : childInfo) {
             if (childType == MMS_STRUCTURE) {
                 std::string childRef = baseRef + "." + childName;
-                printf("    [Cache-%d] Recursing into: %s (type=%d)\n",
-                       recursionDepth, childRef.c_str(), childType);
+                //printf("    [Cache-%d] Recursing into: %s (type=%d)\n", recursionDepth, childRef.c_str(), childType);
                 RecursiveCacheStructureElements(connection, client, 
                                                childRef, fc, 
                                                recursionDepth + 1);
             } else {
-                printf("    [Cache-%d] Child %s is not a structure (type=%d), skipping recursion\n",
-                       recursionDepth, childName.c_str(), childType);
+                //printf("    [Cache-%d] Child %s is not a structure (type=%d), skipping recursion\n", recursionDepth, childName.c_str(), childType);
             }
         }
         
     } else {
-        printf("    [Cache-%d] Not a structure, type=%d\n", recursionDepth, type);
+        //printf("    [Cache-%d] Not a structure, type=%d\n", recursionDepth, type);
     }
     
-    printf("    [Cache-%d] Destroying variable spec for %s...\n", recursionDepth, baseRef.c_str());
+    //printf("    [Cache-%d] Destroying variable spec for %s...\n", recursionDepth, baseRef.c_str());
     MmsVariableSpecification_destroy(spec);
-    printf("    [Cache-%d] FINISHED processing %s\n\n", recursionDepth, baseRef.c_str());
+    //printf("    [Cache-%d] FINISHED processing %s\n\n", recursionDepth, baseRef.c_str());
 }
 
 void MmsClient::CacheDataSetStructure(const std::string& datasetRef, 
@@ -1073,9 +1054,9 @@ void MmsClient::CacheDataSetStructure(const std::string& datasetRef,
 
     
     
-    printf("!!! DEBUG: ENTERING CacheDataSetStructure !!!\n");
-    printf("!!! DEBUG: datasetRef = %s\n", datasetRef.c_str());
-    printf("!!! DEBUG: connected_ = %d, connection_ = %p\n", connected_, (void*)connection_);
+    //printf("!!! DEBUG: ENTERING CacheDataSetStructure !!!\n");
+    //printf("!!! DEBUG: datasetRef = %s\n", datasetRef.c_str());
+    //printf("!!! DEBUG: connected_ = %d, connection_ = %p\n", connected_, (void*)connection_);
     fflush(stdout);
 
     if (!connected_ || !connection_) {
@@ -1084,13 +1065,13 @@ void MmsClient::CacheDataSetStructure(const std::string& datasetRef,
         return;
     }
     
-    printf("CacheDataSetStructure called for: %s\n", datasetRef.c_str());
-    printf("Current cache size: %zu\n", datasetCache_.size());
+    //printf("CacheDataSetStructure called for: %s\n", datasetRef.c_str());
+    //printf("Current cache size: %zu\n", datasetCache_.size());
     
     // ПРОВЕРКА: если DataSet уже закэширован, пропускаем кэширование
     if (datasetCache_.find(datasetRef) != datasetCache_.end()) {
-        printf("CacheDataSetStructure: DataSet %s already cached, skipping.\n", datasetRef.c_str());
-        printf("  Already cached members: %zu\n", datasetCache_[datasetRef].memberRefs.size());
+        //printf("CacheDataSetStructure: DataSet %s already cached, skipping.\n", datasetRef.c_str());
+        //printf("  Already cached members: %zu\n", datasetCache_[datasetRef].memberRefs.size());
         return;
     }
     
@@ -1107,7 +1088,7 @@ void MmsClient::CacheDataSetStructure(const std::string& datasetRef,
     
     // Обрабатываем каждый элемент DataSet рекурсивно
     for (const auto& memberRef : memberRefs) {
-        printf("\n  Processing member: %s\n", memberRef.c_str());
+        //printf("\n  Processing member: %s\n", memberRef.c_str());
         
         // Извлекаем FC и чистую ссылку
         std::string cleanRef = memberRef;
@@ -1119,16 +1100,15 @@ void MmsClient::CacheDataSetStructure(const std::string& datasetRef,
                                                 memberRef.length() - bracketPos - 2);
             cleanRef = memberRef.substr(0, bracketPos);
             fc = ParseFCFromString(fcStr);
-            printf("    Extracted: cleanRef='%s', fcStr='%s', fc=%d\n",
-                   cleanRef.c_str(), fcStr.c_str(), fc);
+            //printf("    Extracted: cleanRef='%s', fcStr='%s', fc=%d\n", cleanRef.c_str(), fcStr.c_str(), fc);
         } else {
-            printf("    WARNING: No FC in memberRef '%s', using default ST\n", memberRef.c_str());
+            //printf("    WARNING: No FC in memberRef '%s', using default ST\n", memberRef.c_str());
         }
         
         // Рекурсивно кэшируем все уровни структуры
-        printf("    Starting recursive cache for '%s' with FC=%d\n", cleanRef.c_str(), fc);
+        //printf("    Starting recursive cache for '%s' with FC=%d\n", cleanRef.c_str(), fc);
         RecursiveCacheStructureElements(connection_, this, cleanRef, fc, 0);
-        printf("    Finished recursive cache for '%s'\n", cleanRef.c_str());
+        //printf("    Finished recursive cache for '%s'\n", cleanRef.c_str());
     }
     
     datasetCache_[datasetRef] = cache;
@@ -1141,14 +1121,14 @@ bool MmsClient::GetCachedElementNames(const std::string& ref, FunctionalConstrai
                                      std::vector<std::string>& elementNames) {
     std::lock_guard<std::recursive_mutex> lock(connMutex_);
     
-    printf("  GetCachedElementNames called for ref='%s', fc=%d\n", ref.c_str(), fc);
+    //printf("  GetCachedElementNames called for ref='%s', fc=%d\n", ref.c_str(), fc);
          
     // Поиск по точному совпадению (уже есть)
     for (const auto& [datasetRef, cache] : datasetCache_) {
         auto it = cache.structureCache.find(ref);
         if (it != cache.structureCache.end()) {
             elementNames = it->second.elementNames;
-            printf("  ✓ Found cached element names for EXACT ref '%s'\n", ref.c_str());
+            //printf("  ✓ Found cached element names for EXACT ref '%s'\n", ref.c_str());
             return true;
         }
     }
@@ -1168,14 +1148,13 @@ bool MmsClient::GetCachedElementNames(const std::string& ref, FunctionalConstrai
         for (const auto& [fcStr, fcValue] : fcVariants) {
             if (fcValue == fc) {
                 std::string refWithFc = ref + "[" + fcStr + "]";
-                printf("  Trying to find with FC: %s -> '%s'\n", fcStr.c_str(), refWithFc.c_str());
+                //printf("  Trying to find with FC: %s -> '%s'\n", fcStr.c_str(), refWithFc.c_str());
                 
                 for (const auto& [datasetRef, cache] : datasetCache_) {
                     auto it = cache.structureCache.find(refWithFc);
                     if (it != cache.structureCache.end()) {
                         elementNames = it->second.elementNames;
-                        printf("  ✓ Found cached element names for %s (added FC %s)\n",
-                               ref.c_str(), fcStr.c_str());
+                        //printf("  ✓ Found cached element names for %s (added FC %s)\n", ref.c_str(), fcStr.c_str());
                         return true;
                     }
                 }
@@ -1188,22 +1167,21 @@ bool MmsClient::GetCachedElementNames(const std::string& ref, FunctionalConstrai
     size_t bracketPos = ref.find('[');
     if (bracketPos != std::string::npos) {
         std::string cleanRef = ref.substr(0, bracketPos);
-        printf("  Also trying clean ref without FC: '%s'\n", cleanRef.c_str());
+        //printf("  Also trying clean ref without FC: '%s'\n", cleanRef.c_str());
         
         for (const auto& [datasetRef, cache] : datasetCache_) {
             // Ищем все ключи, которые начинаются с cleanRef
             for (const auto& [cachedRef, structInfo] : cache.structureCache) {
                 if (cachedRef.find(cleanRef) == 0) {  // Начинается с cleanRef
                     elementNames = structInfo.elementNames;
-                    printf("  ✓ Found cached element names via partial match: '%s' matches '%s'\n",
-                           cleanRef.c_str(), cachedRef.c_str());
+                    //printf("  ✓ Found cached element names via partial match: '%s' matches '%s'\n", cleanRef.c_str(), cachedRef.c_str());
                     return true;
                 }
             }
         }
     }
     
-    printf("  ✗ No cached element names found for '%s' (fc=%d)\n", ref.c_str(), fc);
+    //printf("  ✗ No cached element names found for '%s' (fc=%d)\n", ref.c_str(), fc);
     return false;
 }
 
@@ -1213,8 +1191,7 @@ void MmsClient::CacheStructureElements(const std::string& ref, FunctionalConstra
                                       const std::vector<MmsType>& elementTypes) {
     std::lock_guard<std::recursive_mutex> lock(connMutex_);
     
-    printf("  CACHE STORE: Storing structure '%s' (fc=%d) with %zu elements\n",
-           ref.c_str(), fc, elementNames.size());
+    //printf("  CACHE STORE: Storing structure '%s' (fc=%d) with %zu elements\n",  ref.c_str(), fc, elementNames.size());
 
     // Создаем запись для кэша
     StructureElementNames structInfo;
@@ -1237,8 +1214,7 @@ void MmsClient::CacheStructureElements(const std::string& ref, FunctionalConstra
             if (cleanMemberRef == ref) {
                 cache.structureCache[ref] = structInfo;
                 cached = true;
-                printf("Cached structure elements for %s in DataSet %s: %zu elements\n",
-                       ref.c_str(), datasetRef.c_str(), elementNames.size());
+                //printf("Cached structure elements for %s in DataSet %s: %zu elements\n", ref.c_str(), datasetRef.c_str(), elementNames.size());
                 break;
             }
         }
@@ -1253,8 +1229,7 @@ void MmsClient::CacheStructureElements(const std::string& ref, FunctionalConstra
         newCache.structureCache[ref] = structInfo;
         datasetCache_[newCache.datasetRef] = newCache;
         
-        printf("Created new cache for structure %s: %zu elements\n",
-               ref.c_str(), elementNames.size());
+        //printf("Created new cache for structure %s: %zu elements\n", ref.c_str(), elementNames.size());
     }
 }
 
@@ -1280,8 +1255,7 @@ static Napi::Value ProcessStructureWithCache(Napi::Env env, MmsClient* client,
     }
     
     int structSize = MmsValue_getArraySize(structVal);
-    printf("    Processing structure with cache %s (size=%d, fc=%d, depth=%d)\n",
-           cleanRef.c_str(), structSize, fc, recursionDepth);
+    //printf("    Processing structure with cache %s (size=%d, fc=%d, depth=%d)\n", cleanRef.c_str(), structSize, fc, recursionDepth);
     
     // Ключевое изменение: передаем cleanRef, а не fullRef
     std::vector<std::string> elementNames;
@@ -1292,8 +1266,7 @@ static Napi::Value ProcessStructureWithCache(Napi::Env env, MmsClient* client,
     }
     
     if (hasCachedNames && elementNames.size() == static_cast<size_t>(structSize)) {
-        printf("    SUCCESS: Using cached element names for %s (count: %zu)\n", 
-               cleanRef.c_str(), elementNames.size());
+        //printf("    SUCCESS: Using cached element names for %s (count: %zu)\n", cleanRef.c_str(), elementNames.size());
         
         for (int i = 0; i < structSize; ++i) {
             MmsValue* element = MmsValue_getElement(structVal, i);
@@ -1309,8 +1282,7 @@ static Napi::Value ProcessStructureWithCache(Napi::Env env, MmsClient* client,
                     elementFullRef += fcPart;
                 }
 
-                printf("      Element [%d]: %s (full ref: %s)\n",
-                       i, elementName.c_str(), elementFullRef.c_str());
+                //printf("      Element [%d]: %s (full ref: %s)\n", i, elementName.c_str(), elementFullRef.c_str());
                 
                 // Рекурсивно обрабатываем элемент
                 structObj.Set(elementName,
@@ -1405,8 +1377,7 @@ static Napi::Value ProcessMmsValueWithCache(Napi::Env env, MmsClient* client,
     
     // Если это структура, используем функцию с кэшем
     if (type == MMS_STRUCTURE) {
-        printf("    Processing structure with cache %s (depth: %d)\n", 
-               elementRef.c_str(), recursionDepth);
+        //printf("    Processing structure with cache %s (depth: %d)\n", elementRef.c_str(), recursionDepth);
         return ProcessStructureWithCache(env, client, elementRef, val, recursionDepth);
     }
     
@@ -1470,16 +1441,16 @@ MmsClient::MmsClient(const Napi::CallbackInfo& info) : Napi::ObjectWrap<MmsClien
 
 MmsClient::~MmsClient() {
     printf("\n=== MmsClient Destructor ===\n");
-    printf("  Thread ID: %zu\n", std::hash<std::thread::id>{}(std::this_thread::get_id()));
-    printf("  clientID: %s\n", clientID_.c_str());
+    //printf("  Thread ID: %zu\n", std::hash<std::thread::id>{}(std::this_thread::get_id()));
+    //printf("  clientID: %s\n", clientID_.c_str());
     
     std::lock_guard<std::recursive_mutex> lock(connMutex_);
-    printf("  Inside destructor lock:\n");
-    printf("    connected_ = %d\n", connected_);
-    printf("    running_ = %d\n", running_);
-    printf("    isClosing_ = %d\n", isClosing_);
-    printf("    connection pointer = %p\n", (void*)connection_);
-    printf("    active reports = %zu\n", activeReports_.size());
+    //printf("  Inside destructor lock:\n");
+    //printf("    connected_ = %d\n", connected_);
+    //printf("    running_ = %d\n", running_);
+    //printf("    isClosing_ = %d\n", isClosing_);
+    //printf("    connection pointer = %p\n", (void*)connection_);
+    //printf("    active reports = %zu\n", activeReports_.size());
     
     // Если клиент еще не закрыт корректно, делаем это сейчас
     if (running_ || connected_) {
@@ -1873,36 +1844,33 @@ Napi::Value MmsClient::Close(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
     Napi::Promise::Deferred deferred = Napi::Promise::Deferred::New(env);
     
-    printf("\n=== MmsClient::Close() called from JavaScript ===\n");
-    printf("  Thread ID: %zu (main thread? %s)\n", 
-           std::hash<std::thread::id>{}(std::this_thread::get_id()),
-           (std::this_thread::get_id() == std::thread::id()) ? "YES" : "NO");
-    printf("  clientID: %s\n", clientID_.c_str());
+    //printf("\n=== MmsClient::Close() called from JavaScript ===\n");
+    //printf("  Thread ID: %zu (main thread? %s)\n", std::hash<std::thread::id>{}(std::this_thread::get_id()), (std::this_thread::get_id() == std::thread::id()) ? "YES" : "NO");
+    //printf("  clientID: %s\n", clientID_.c_str());
     
     try {
         {
             std::lock_guard<std::recursive_mutex> lock(connMutex_);
-            printf("  Inside lock: connected_=%d, running_=%d, isClosing_=%d\n",
-                   connected_, running_, isClosing_);
-            printf("  Connection pointer: %p\n", (void*)connection_);
+            //printf("  Inside lock: connected_=%d, running_=%d, isClosing_=%d\n", connected_, running_, isClosing_);
+            //printf("  Connection pointer: %p\n", (void*)connection_);
             
             // Проверяем, не закрываем ли уже
             if (isClosing_) {
-                printf("  WARNING: Already closing, ignoring duplicate call\n");
+                //printf("  WARNING: Already closing, ignoring duplicate call\n");
                 deferred.Resolve(Napi::Boolean::New(env, false));
                 return deferred.Promise();
             }
             
             isClosing_ = true;
-            printf("  Set isClosing_=true\n");
+            //printf("  Set isClosing_=true\n");
             
             if (running_) {
                 running_ = false;
-                printf("  Set running_=false\n");
+                //printf("  Set running_=false\n");
                 
                 if (connected_) {
-                    printf("  *** CLOSING ACTIVE CONNECTION ***\n");
-                    printf("  Calling IedConnection_close() on %p...\n", (void*)connection_);
+                    //printf("  *** CLOSING ACTIVE CONNECTION ***\n");
+                    //printf("  Calling IedConnection_close() on %p...\n", (void*)connection_);
                     
                     // Сохраняем состояние до закрытия
                     IedConnectionState beforeClose = IED_STATE_CLOSED;
@@ -1929,83 +1897,83 @@ Napi::Value MmsClient::Close(const Napi::CallbackInfo& info) {
                     
                     // Затем закрываем соединение
                     IedConnection_close(connection_);
-                    printf("  IedConnection_close() completed\n");
+                    //printf("  IedConnection_close() completed\n");
                     
                     connected_ = false;
-                    printf("  Set connected_=false\n");
+                    //printf("  Set connected_=false\n");
                     
                     // Проверяем состояние после закрытия
                     if (connection_) {
                         IedConnectionState afterClose = IedConnection_getState(connection_);
-                        printf("  State after close: %d\n", afterClose);
+                        //printf("  State after close: %d\n", afterClose);
                     }
                 } else {
-                    printf("  Already disconnected, skipping IedConnection_close()\n");
+                    //printf("  Already disconnected, skipping IedConnection_close()\n");
                 }
             } else {
-                printf("  Client not running, no connection to close\n");
+                //printf("  Client not running, no connection to close\n");
             }
         }
         
-        printf("  Waiting for connection thread to finish...\n");
+        //printf("  Waiting for connection thread to finish...\n");
         if (thread_.joinable()) {
-            printf("  Thread joinable, calling join()...\n");
+            //printf("  Thread joinable, calling join()...\n");
             thread_.join();
-            printf("  Thread joined successfully\n");
+            //printf("  Thread joined successfully\n");
         } else {
-            printf("  Thread not joinable\n");
+            //printf("  Thread not joinable\n");
         }
         
         {
             std::lock_guard<std::recursive_mutex> lock(connMutex_);
-            printf("  Cleaning up resources...\n");
+            //printf("  Cleaning up resources...\n");
             
             // Освобождаем ресурсы отчетов
-            printf("  Active reports to clean up: %zu\n", activeReports_.size());
+            //printf("  Active reports to clean up: %zu\n", activeReports_.size());
             for (auto& [rcbRef, reportInfo] : activeReports_) {
-                printf("    Cleaning up report: %s\n", rcbRef.c_str());
+                //printf("    Cleaning up report: %s\n", rcbRef.c_str());
                 if (reportInfo.rcb) {
                     ClientReportControlBlock_destroy(reportInfo.rcb);
                     reportInfo.rcb = nullptr;
-                    printf("      Destroyed RCB\n");
+                    //printf("      Destroyed RCB\n");
                 }
                 if (reportInfo.dataSet) {
                     ClientDataSet_destroy(reportInfo.dataSet);
                     reportInfo.dataSet = nullptr;
-                    printf("      Destroyed DataSet\n");
+                    //printf("      Destroyed DataSet\n");
                 }
                 // dataSetMembers и structureElementNamesCache очистятся автоматически
             }
             activeReports_.clear();
-            printf("  All reports cleaned up\n");
+            //printf("  All reports cleaned up\n");
             
             // Очищаем кэш
-            printf("  Dataset cache entries: %zu\n", datasetCache_.size());
+            //printf("  Dataset cache entries: %zu\n", datasetCache_.size());
             datasetCache_.clear();
-            printf("  Dataset cache cleared\n");
+            //printf("  Dataset cache cleared\n");
             
             // Уничтожаем соединение
             if (connection_) {
-                printf("  Destroying connection at %p...\n", (void*)connection_);
+                //printf("  Destroying connection at %p...\n", (void*)connection_);
                 IedConnection_destroy(connection_);
                 connection_ = nullptr;
-                printf("  Connection destroyed\n");
+                //printf("  Connection destroyed\n");
             } else {
-                printf("  Connection already null\n");
+                //printf("  Connection already null\n");
             }
             
             // Освобождаем TSFN
             if (tsfn_) {
-                printf("  Releasing TSFN...\n");
+                //printf("  Releasing TSFN...\n");
                 tsfn_.Release();
                 tsfn_ = Napi::ThreadSafeFunction();
-                printf("  TSFN released\n");
+                //printf("  TSFN released\n");
             } else {
-                printf("  TSFN already null\n");
+                //printf("  TSFN already null\n");
             }
         }
         
-        printf("=== MmsClient::Close() completed successfully ===\n\n");
+        //printf("=== MmsClient::Close() completed successfully ===\n\n");
         deferred.Resolve(Napi::Boolean::New(env, true));
     } catch (const std::exception& e) {
         printf("  EXCEPTION in Close: %s, clientID: %s\n", e.what(), clientID_.c_str());
@@ -3517,8 +3485,7 @@ Napi::Value MmsClient::ReadData(const Napi::CallbackInfo& info) {
             fc = ParseFCFromString(fcStr);
             actualRef = ref.substr(0, bracketPos);
             
-            printf("ReadData: Parsed ref '%s' -> actualRef='%s', fc=%d\n", 
-                   ref.c_str(), actualRef.c_str(), fc);
+            //printf("ReadData: Parsed ref '%s' -> actualRef='%s', fc=%d\n", ref.c_str(), actualRef.c_str(), fc);
         }
         
         // Пытаемся прочитать значение с указанным FC
@@ -3543,8 +3510,7 @@ Napi::Value MmsClient::ReadData(const Napi::CallbackInfo& info) {
                 value = IedConnection_readObject(connection_, &error, actualRef.c_str(), tryFc);
                 if (error == IED_ERROR_OK && value) {
                     fc = tryFc;
-                    printf("ReadData: Success with alternative FC=%d for '%s'\n", 
-                           fc, actualRef.c_str());
+                    //printf("ReadData: Success with alternative FC=%d for '%s'\n", fc, actualRef.c_str());
                     break;
                 }
             }
