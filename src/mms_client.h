@@ -38,8 +38,7 @@ public:
     // флаг для управления соединением
     bool connectionClosingIntentionally_ = false;
 
-    // Счетчик активных отчетов (увеличивается при входе в ReportCallback)
-    std::atomic<int> reportCount_{0};
+
 
     struct ReportInfo {
         ClientReportControlBlock rcb = nullptr;

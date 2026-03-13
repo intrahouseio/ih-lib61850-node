@@ -76,57 +76,52 @@ namespace {
         ~ReadDataSetModelWorker() {}
 
         void Execute() override {
-        // Сначала под мьютексом можно скопировать данные, если нужно (но здесь мы читаем всё с нуля)
-        for (const auto& dsRef : datasetRefs_) {
-            // Проверяем отчет перед каждой итерацией
-            if (client_->reportCount_.load() > 0) {
-                DataSetReadResult errRes;
-                errRes.datasetRef = dsRef;
-                errRes.isValid = false;
-                errRes.errorReason = "Interrupted by incoming report";
-                results_.push_back(errRes);
-                continue; // или break
-            }
+            for (const auto& dsRef : datasetRefs_) {
+                DataSetReadResult res;
+                res.datasetRef = dsRef;
+                res.isValid = false;
 
-            DataSetReadResult res;
-            res.datasetRef = dsRef;
-
-            // Захватываем мьютекс только на время операций с соединением
-            {
-                std::lock_guard<std::recursive_mutex> lock(connMutex_);
-
-                IedClientError error;
+                // --- Шаг 1: Получение директории DataSet и memberRefs ---
+                std::vector<std::string> memberRefs;
                 bool isDeletable = false;
-                LinkedList members = IedConnection_getDataSetDirectory(
-                    connection_, &error, dsRef.c_str(), &isDeletable);
+                {
+                    std::lock_guard<std::recursive_mutex> lock(connMutex_);
+                    IedClientError error;
+                    LinkedList members = IedConnection_getDataSetDirectory(
+                        connection_, &error, dsRef.c_str(), &isDeletable);
 
-                if (error != IED_ERROR_OK || !members) {
-                    res.errorReason = "Cannot get dataset directory, error: " + std::to_string(error);
-                    results_.push_back(res);
-                    continue;
-                }
-
-                // Копируем memberRefs
-                LinkedList entry = members;
-                while (entry) {
-                    if (entry->data) {
-                        char* memberRef = (char*)entry->data;
-                        res.memberRefs.push_back(std::string(memberRef));
+                    if (error != IED_ERROR_OK || !members) {
+                        res.errorReason = "Cannot get dataset directory, error: " + std::to_string(error);
+                        results_.push_back(res);
+                        continue;
                     }
-                    entry = LinkedList_getNext(entry);
+
+                    LinkedList entry = members;
+                    while (entry) {
+                        if (entry->data) {
+                            char* memberRef = (char*)entry->data;
+                            memberRefs.push_back(std::string(memberRef));
+                        }
+                        entry = LinkedList_getNext(entry);
+                    }
+                    LinkedList_destroy(members);
+
+                    // Кэшируем имена членов DataSet
+                    client_->CacheDataSetStructure(dsRef, memberRefs);
                 }
+                res.memberRefs = memberRefs;
 
-                // Кэшируем имена (это не требует мьютекса после? но функция CacheDataSetStructure сама захватывает мьютекс)
-                // Мы находимся под мьютексом, поэтому можно вызвать
-                client_->CacheDataSetStructure(dsRef, res.memberRefs);
-
-                // Читаем значения DataSet
-                ClientDataSet clientDataSet = IedConnection_readDataSetValues(
-                    connection_, &error, dsRef.c_str(), nullptr);
+                // --- Шаг 2: Чтение значений DataSet (только вызов под мьютексом) ---
+                IedClientError error;
+                ClientDataSet clientDataSet = nullptr;
+                {
+                    std::lock_guard<std::recursive_mutex> lock(connMutex_);
+                    clientDataSet = IedConnection_readDataSetValues(
+                        connection_, &error, dsRef.c_str(), nullptr);
+                }
 
                 if (error != IED_ERROR_OK || !clientDataSet) {
                     res.errorReason = "Cannot read dataset values, error: " + std::to_string(error);
-                    LinkedList_destroy(members);
                     results_.push_back(res);
                     continue;
                 }
@@ -135,36 +130,47 @@ namespace {
                 if (!valuesArray || MmsValue_getType(valuesArray) != MMS_ARRAY) {
                     res.errorReason = "Invalid dataset values format";
                     ClientDataSet_destroy(clientDataSet);
-                    LinkedList_destroy(members);
                     results_.push_back(res);
                     continue;
                 }
 
                 int arraySize = MmsValue_getArraySize(valuesArray);
-                int elementsToProcess = std::min(arraySize, (int)res.memberRefs.size());
+                int elementsToProcess = std::min(arraySize, (int)memberRefs.size());
+                res.isValid = true;
+                res.isDeletable = isDeletable;
+                res.count = elementsToProcess;
 
+                // Конвертация значений
+                std::vector<MmsClient::ResultData> rawValues;
                 for (int i = 0; i < elementsToProcess; ++i) {
                     MmsValue* val = MmsValue_getElement(valuesArray, i);
                     if (!val) continue;
 
-                    const std::string& fullRef = res.memberRefs[i];
+                    const std::string& fullRef = memberRefs[i];
                     std::string attrName = fullRef;
                     size_t lastDot = fullRef.rfind('.');
                     if (lastDot != std::string::npos) attrName = fullRef.substr(lastDot + 1);
 
                     MmsClient::ResultData rd = ConvertMmsValueForReportFast(val, attrName, 0);
-                    res.values.push_back(rd);
+                    rawValues.push_back(rd);
                 }
 
-                ClientDataSet_destroy(clientDataSet);
-                LinkedList_destroy(members);
-            } // мьютекс освобожден
+                // --- Шаг 3: Применение кэшированных имён структур под мьютексом ---
+                {
+                    std::lock_guard<std::recursive_mutex> lock(connMutex_);
+                    for (size_t i = 0; i < rawValues.size(); ++i) {
+                        const std::string& fullRef = memberRefs[i];
+                        if (rawValues[i].type == MMS_STRUCTURE) {
+                            EnhanceResultDataWithCachedNames(client_, rawValues[i], fullRef, 0);
+                        }
+                    }
+                }
 
-            res.isValid = true;
-            res.count = (int)res.values.size();
-            results_.push_back(res);
+                res.values = std::move(rawValues);
+                ClientDataSet_destroy(clientDataSet);
+                results_.push_back(res);
+            }
         }
-    }
 
         void OnOK() override {
             Napi::Env env = env_;
@@ -173,7 +179,6 @@ namespace {
             for (size_t idx = 0; idx < results_.size(); ++idx) {
                 DataSetReadResult& res = results_[idx];
                 Napi::Object obj = Napi::Object::New(env);
-                
                 obj.Set("datasetRef", Napi::String::New(env, res.datasetRef));
                 obj.Set("isValid", Napi::Boolean::New(env, res.isValid));
 
@@ -190,15 +195,8 @@ namespace {
                 Napi::Object memberRefsObj = Napi::Object::New(env);
 
                 for (size_t i = 0; i < res.values.size(); ++i) {
-                    MmsClient::ResultData rd = res.values[i];
+                    const MmsClient::ResultData& rd = res.values[i];
                     const std::string& fullRef = res.memberRefs[i];
-
-                    // Применяем кэшированные имена структур (если есть)
-                    if (rd.type == MMS_STRUCTURE) {
-                        EnhanceResultDataWithCachedNames(client_, rd, fullRef, 0);
-                    }
-
-                    // Конвертируем в Napi значение с именами
                     Napi::Value jsValue = ResultDataToNapiWithNames(env, rd, fullRef);
                     valuesObj.Set(fullRef, jsValue);
                     memberRefsObj.Set(fullRef, Napi::String::New(env, fullRef));
@@ -206,7 +204,6 @@ namespace {
 
                 obj.Set("values", valuesObj);
                 obj.Set("memberRefs", memberRefsObj);
-                
                 resultArray.Set(idx, obj);
             }
 
@@ -259,91 +256,97 @@ namespace {
         ~PollDataSetValuesWorker() {}
 
         void Execute() override {
-            // Сначала под мьютексом копируем необходимые данные из кэша
-            std::vector<DataSetCache> cacheEntries; // структура с datasetRef и memberRefs
-            {
-                std::lock_guard<std::recursive_mutex> lock(connMutex_);
-                for (const auto& dsRef : datasetRefs_) {
-                    auto it = client_->GetDataSetCache().find(dsRef);
-                    if (it != client_->GetDataSetCache().end()) {
-                        cacheEntries.push_back({dsRef, it->second.memberRefs});
-                    } else {
-                        // Если нет в кэше, сразу формируем ошибку
-                        DataSetPollResult errRes;
-                        errRes.datasetRef = dsRef;
-                        errRes.isValid = false;
-                        errRes.errorReason = "DataSet not cached";
-                        results_.push_back(errRes);
-                    }
-                }
-            }
-
-            // Обрабатываем каждый DataSet, для которого есть кэш
-            for (const auto& entry : cacheEntries) {
-                // Проверяем, не началась ли обработка отчета
-                if (client_->reportCount_.load() > 0) {
-                    DataSetPollResult errRes;
-                    errRes.datasetRef = entry.datasetRef;
-                    errRes.isValid = false;
-                    errRes.errorReason = "Interrupted by incoming report";
-                    results_.push_back(errRes);
-                    continue; // можно break, если хотим остановиться полностью
-                }
-
+            for (const auto& dsRef : datasetRefs_) {
                 DataSetPollResult res;
-                res.datasetRef = entry.datasetRef;
-                res.memberRefs = entry.memberRefs;
+                res.datasetRef = dsRef;
+                res.isValid = false;
 
-                // Захватываем мьютекс только на время сетевого вызова
+                // --- Шаг 1: Получение memberRefs из кэша под мьютексом ---
+                std::vector<std::string> memberRefs;
                 {
                     std::lock_guard<std::recursive_mutex> lock(connMutex_);
-                    IedClientError error;
-                    ClientDataSet clientDataSet = IedConnection_readDataSetValues(
-                        connection_, &error, entry.datasetRef.c_str(), nullptr);
-
-                    if (error != IED_ERROR_OK || !clientDataSet) {
-                        res.errorReason = "Cannot read dataset values, error: " + std::to_string(error);
+                    auto cacheIt = client_->GetDataSetCache().find(dsRef);
+                    if (cacheIt == client_->GetDataSetCache().end()) {
+                        res.errorReason = "DataSet not cached. Please call readDataSetModel first.";
                         results_.push_back(res);
                         continue;
                     }
+                    memberRefs = cacheIt->second.memberRefs; // копируем
+                }
+                res.memberRefs = memberRefs;
 
-                    MmsValue* valuesArray = ClientDataSet_getValues(clientDataSet);
-                    if (!valuesArray || MmsValue_getType(valuesArray) != MMS_ARRAY) {
-                        res.errorReason = "Invalid dataset values format";
-                        ClientDataSet_destroy(clientDataSet);
-                        results_.push_back(res);
-                        continue;
-                    }
+                // --- Шаг 2: Чтение DataSet (только вызов под мьютексом) ---
+                auto readStart = std::chrono::steady_clock::now();
 
-                    // Копируем данные (MmsValue) под мьютексом, но саму конвертацию можно делать после
-                    // Для простоты будем конвертировать сразу, но это не требует мьютекса
-                    int arraySize = MmsValue_getArraySize(valuesArray);
-                    int elementsToProcess = std::min(arraySize, (int)entry.memberRefs.size());
+                IedClientError error;
+                ClientDataSet clientDataSet = nullptr;
+                {
+                    std::lock_guard<std::recursive_mutex> lock(connMutex_);
+                    clientDataSet = IedConnection_readDataSetValues(
+                        connection_, &error, dsRef.c_str(), nullptr);
+                }
 
-                    for (int i = 0; i < elementsToProcess; ++i) {
-                        MmsValue* val = MmsValue_getElement(valuesArray, i);
-                        if (!val) continue;
+                auto readEnd = std::chrono::steady_clock::now();
+                res.readTimeMicros = std::chrono::duration_cast<std::chrono::microseconds>(readEnd - readStart).count();
 
-                        const std::string& fullRef = entry.memberRefs[i];
-                        std::string attrName = fullRef;
-                        size_t lastDot = fullRef.rfind('.');
-                        if (lastDot != std::string::npos) attrName = fullRef.substr(lastDot + 1);
+                if (error != IED_ERROR_OK || !clientDataSet) {
+                    res.errorReason = "Cannot read dataset values, error: " + std::to_string(error);
+                    results_.push_back(res);
+                    continue;
+                }
 
-                        // Быстрая конвертация (без мьютекса, работает только с MmsValue)
-                        MmsClient::ResultData rd = ConvertMmsValueForReportFast(val, attrName, 0);
-                        res.values.push_back(rd);
-                    }
-
+                MmsValue* valuesArray = ClientDataSet_getValues(clientDataSet);
+                if (!valuesArray || MmsValue_getType(valuesArray) != MMS_ARRAY) {
+                    res.errorReason = "Invalid dataset values format";
                     ClientDataSet_destroy(clientDataSet);
-                } // мьютекс освобождается здесь
+                    results_.push_back(res);
+                    continue;
+                }
 
-                // После освобождения мьютекса можно установить остальные поля результата
+                int arraySize = MmsValue_getArraySize(valuesArray);
+                int elementsToProcess = std::min(arraySize, (int)memberRefs.size());
+
+                auto processStart = std::chrono::steady_clock::now();
+
+                // Вектор для сырых ResultData (без имён структур)
+                std::vector<MmsClient::ResultData> rawValues;
+                rawValues.reserve(elementsToProcess);
+
+                for (int i = 0; i < elementsToProcess; ++i) {
+                    MmsValue* val = MmsValue_getElement(valuesArray, i);
+                    if (!val) continue;
+
+                    const std::string& fullRef = memberRefs[i];
+                    std::string attrName = fullRef;
+                    size_t lastDot = fullRef.rfind('.');
+                    if (lastDot != std::string::npos) attrName = fullRef.substr(lastDot + 1);
+
+                    MmsClient::ResultData rd = ConvertMmsValueForReportFast(val, attrName, 0);
+                    rawValues.push_back(rd);
+                }
+
+                auto processEnd = std::chrono::steady_clock::now();
+                res.processTimeMicros = std::chrono::duration_cast<std::chrono::microseconds>(processEnd - processStart).count();
+
+                // --- Шаг 3: Применение кэшированных имён структур под мьютексом ---
+                {
+                    std::lock_guard<std::recursive_mutex> lock(connMutex_);
+                    for (size_t i = 0; i < rawValues.size(); ++i) {
+                        const std::string& fullRef = memberRefs[i];
+                        if (rawValues[i].type == MMS_STRUCTURE) {
+                            EnhanceResultDataWithCachedNames(client_, rawValues[i], fullRef, 0);
+                        }
+                    }
+                }
+
+                res.values = std::move(rawValues);
                 res.isValid = true;
-                res.count = (int)res.values.size();
+                res.count = elementsToProcess;
+
+                ClientDataSet_destroy(clientDataSet);
                 results_.push_back(res);
             }
-        }  
-
+        }
 
         void OnOK() override {
             Napi::Env env = env_;
@@ -366,20 +369,12 @@ namespace {
                 obj.Set("processTimeMicros", Napi::Number::New(env, static_cast<double>(res.processTimeMicros)));
 
                 Napi::Object valuesObj = Napi::Object::New(env);
-
                 for (size_t i = 0; i < res.values.size(); ++i) {
-                    MmsClient::ResultData rd = res.values[i];
+                    const MmsClient::ResultData& rd = res.values[i];
                     const std::string& fullRef = res.memberRefs[i];
-
-                    // Применяем кэшированные имена структур
-                    if (rd.type == MMS_STRUCTURE) {
-                        EnhanceResultDataWithCachedNames(client_, rd, fullRef, 0);
-                    }
-
                     Napi::Value jsValue = ResultDataToNapiWithNames(env, rd, fullRef);
                     valuesObj.Set(fullRef, jsValue);
                 }
-
                 obj.Set("values", valuesObj);
                 resultArray.Set(idx, obj);
             }
@@ -3483,21 +3478,7 @@ Napi::Value MmsClient::ReadData(const Napi::CallbackInfo& info) {
 
     Napi::Array results = Napi::Array::New(env, dataRefs.size());
     
- for (size_t i = 0; i < dataRefs.size(); ++i) {
-        // Проверяем, не началась ли обработка отчета
-        if (reportCount_.load() > 0) {
-            // Заполняем оставшиеся элементы ошибкой
-            for (size_t j = i; j < dataRefs.size(); ++j) {
-                Napi::Object item = Napi::Object::New(env);
-                item.Set("dataRef", Napi::String::New(env, dataRefs[j]));
-                item.Set("isValid", false);
-                item.Set("errorReason", "Interrupted by incoming report");
-                item.Set("value", env.Null());
-                results.Set(static_cast<uint32_t>(j), item);
-            }
-            break; // выходим из цикла
-        }
-
+    for (size_t i = 0; i < dataRefs.size(); ++i) {
         const std::string& ref = dataRefs[i];
         Napi::Object item = Napi::Object::New(env);
         item.Set("dataRef", Napi::String::New(env, ref));
@@ -4231,9 +4212,6 @@ static Napi::Value ResultDataToNapiWithNames(Napi::Env env,
 void MmsClient::ReportCallback(void* parameter, ClientReport report) {
     MmsClient* client = static_cast<MmsClient*>(parameter);
     
-    // Увеличиваем счетчик отчетов
-    client->reportCount_++;
-
     auto startTime = std::chrono::steady_clock::now();
     MmsClient::totalReportsProcessed_++;
     
@@ -4280,19 +4258,21 @@ void MmsClient::ReportCallback(void* parameter, ClientReport report) {
     }
 
     int dataSetSize = MmsValue_getArraySize(dataSetValues);
-    
     printf("  dataSetValues: type=%d, array size=%d\n", MmsValue_getType(dataSetValues), dataSetSize);
     
-    // Получаем информацию об отчете с блокировкой
-    MmsClient::ReportInfo* reportInfo = nullptr;
+    // Получаем информацию об отчете с блокировкой (копируем нужные данные)
+    ReportInfo* reportInfo = nullptr;
     std::vector<std::string> dataSetMembers;
+    std::unordered_map<std::string, std::vector<std::string>> elementNamesCacheCopy;
     
     {
         std::lock_guard<std::recursive_mutex> lock(client->connMutex_);
         auto it = client->activeReports_.find(rcbRef);
         if (it != client->activeReports_.end()) {
             reportInfo = &it->second;
-            dataSetMembers = reportInfo->dataSetMembers;
+            dataSetMembers = reportInfo->dataSetMembers; // копируем
+            // Копируем кэш имён структур, чтобы в лямбде не зависеть от reportInfo
+            elementNamesCacheCopy = reportInfo->structureElementNamesCache;
             printf("  Found active report, dataSet members: %zu\n", dataSetMembers.size());
         } else {
             printf("  WARNING: ReportInfo not found for %s\n", rcbRef.c_str());
@@ -4311,13 +4291,12 @@ void MmsClient::ReportCallback(void* parameter, ClientReport report) {
     
     bool hasTimestamp = ClientReport_hasTimestamp(report);
     uint64_t timestamp = 0;
-    
     if (hasTimestamp) {
         timestamp = ClientReport_getTimestamp(report);
         printf("  Report has timestamp: %llu ms\n", (unsigned long long)timestamp);
     }
     
-    // Быстрая обработка данных
+    // Структура для хранения обработанных данных
     struct ReportItemData {
         std::string fullRef;
         MmsClient::ResultData resultData;
@@ -4372,23 +4351,17 @@ void MmsClient::ReportCallback(void* parameter, ClientReport report) {
             
             // Для структур статуса [ST] используем стандартные имена
             if (isStatusStructure && size >= 3) {
-                // Стандартная структура статуса: stVal, q, t
                 const char* stdNames[] = {"stVal", "q", "t"};
-                
                 for (int i = 0; i < std::min(size, 3); ++i) {
                     MmsValue* childVal = MmsValue_getElement(val, i);
                     if (childVal) {
-                        // Формируем полную ссылку для дочернего элемента
                         std::string childFullRef = fullRef;
                         if (bracketPos != std::string::npos) {
-                            // Вставляем имя элемента перед [ST]
                             childFullRef = fullRef.substr(0, bracketPos) + "." + stdNames[i] + 
                                          fullRef.substr(bracketPos);
                         } else {
                             childFullRef = fullRef + "." + stdNames[i];
                         }
-                        
-                        // Рекурсивно обрабатываем дочерний элемент
                         MmsClient::ResultData childData = processValueRecursive(childVal, childFullRef, recursionDepth + 1);
                         data.structureElements.push_back(childData);
                         data.structureElementNames.push_back(stdNames[i]);
@@ -4401,7 +4374,6 @@ void MmsClient::ReportCallback(void* parameter, ClientReport report) {
                     if (childVal) {
                         std::string indexName = std::to_string(i);
                         std::string childFullRef = fullRef + "." + indexName;
-                        
                         MmsClient::ResultData childData = processValueRecursive(childVal, childFullRef, recursionDepth + 1);
                         data.structureElements.push_back(childData);
                         data.structureElementNames.push_back(indexName);
@@ -4409,22 +4381,15 @@ void MmsClient::ReportCallback(void* parameter, ClientReport report) {
                 }
             }
         } else {
-            // Для простых типов используем ConvertMmsValueForReportFast с правильным именем
+            // Для простых типов используем ConvertMmsValueForReportFast
             data = ConvertMmsValueForReportFast(val, attrName);
-            
-            // Если это stVal в структуре статуса, убедимся, что имя правильное
-            if (isStatusStructure && attrName.find("stVal") != std::string::npos) {
-                // Уже должно быть обработано в ConvertMmsValueForReportFast
-            }
         }
-        
         return data;
     };
     
     // Обрабатываем данные
     for (int i = 0; i < elementsToProcess; i++) {
         ReasonForInclusion reason = ClientReport_getReasonForInclusion(report, i);
-        
         if (reason == IEC61850_REASON_NOT_INCLUDED) {
             continue;
         }
@@ -4441,25 +4406,39 @@ void MmsClient::ReportCallback(void* parameter, ClientReport report) {
             continue;
         }
         
-        // Обрабатываем значение (рекурсивно для структур)
         try {
             MmsClient::ResultData rd = processValueRecursive(value, fullRef, 0);
-            
             ReportItemData item;
             item.fullRef = fullRef;
-            item.resultData = rd;
+            item.resultData = std::move(rd);
             item.reason = reason;
-            
-            reportItems.push_back(item);
+            reportItems.push_back(std::move(item));
         } catch (const std::exception& e) {
             printf("    [%d] Exception in processValueRecursive: %s\n", i, e.what());
-        } catch (...) {
-            printf("    [%d] Unknown exception in processValueRecursive\n", i);
         }
     }
     
     printf("  Processed %zu items from report\n", reportItems.size());
     MmsClient::totalElementsProcessed_ += reportItems.size();
+    
+    // === ВАЖНО: Применяем кэшированные имена структур (под тем же мьютексом) ===
+    {
+        std::lock_guard<std::recursive_mutex> lock(client->connMutex_);
+        for (auto& item : reportItems) {
+            if (item.resultData.type == MMS_STRUCTURE) {
+                // Используем кэш из копии elementNamesCacheCopy (уже скопирован)
+                // Для этого нам нужна функция, принимающая кэш.
+                // Но проще: у нас есть reportInfo, который мы скопировали? 
+                // Мы скопировали elementNamesCacheCopy, но EnhanceStructureWithCachedNames 
+                // использует reportInfo->structureElementNamesCache.
+                // Чтобы не усложнять, можно передать reportInfo, но гарантировать,
+                // что reportInfo жив до выхода из этой блокировки. В данном случае
+                // reportInfo берётся из activeReports_, и мы всё ещё под мьютексом,
+                // поэтому reportInfo валиден. Применяем имена.
+                EnhanceStructureWithCachedNames(item.resultData, item.fullRef, *reportInfo);
+            }
+        }
+    }
     
     // Отправляем в JS если есть что отправлять
     if (!reportItems.empty() && client->tsfn_) {
@@ -4474,8 +4453,8 @@ void MmsClient::ReportCallback(void* parameter, ClientReport report) {
             }
         }
         
-        // Передаем данные в основной поток
-        auto status = client->tsfn_.NonBlockingCall([client, rcbRef, rptId, timestamp, hasTimestamp, reportItems, reportInfo]
+        // Передаём данные в основной поток (копируем reportItems)
+        auto status = client->tsfn_.NonBlockingCall([client, rcbRef, rptId, timestamp, hasTimestamp, reportItems]
                                                     (Napi::Env env, Napi::Function cb) {
             try {
                 printf("  [TSFN] Processing report in JS thread for RCB: %s\n", rcbRef.c_str());
@@ -4505,15 +4484,8 @@ void MmsClient::ReportCallback(void* parameter, ClientReport report) {
                 
                 for (const auto& item : reportItems) {
                     try {
-                        // Копируем ResultData для применения кэша
-                        MmsClient::ResultData enhancedData = item.resultData;
-                        
-                        // ПРИМЕНЯЕМ КЭШИРОВАННЫЕ ИМЕНА ТОЛЬКО ЗДЕСЬ (в JS потоке)
-                        if (reportInfo && enhancedData.type == MMS_STRUCTURE) {
-                            EnhanceStructureWithCachedNames(enhancedData, item.fullRef, *reportInfo);
-                        }
-                        
-                        Napi::Value jsValue = ResultDataToNapiWithNames(env, enhancedData, item.fullRef);
+                        // item.resultData уже содержит имена элементов (structureElementNames)
+                        Napi::Value jsValue = ResultDataToNapiWithNames(env, item.resultData, item.fullRef);
                         valuesObj.Set(item.fullRef, jsValue);
                         reasonsObj.Set(item.fullRef, item.reason);
                     } catch (const std::exception& e) {
@@ -4525,8 +4497,6 @@ void MmsClient::ReportCallback(void* parameter, ClientReport report) {
                 
                 eventObj.Set("values", valuesObj);
                 eventObj.Set("reasons", reasonsObj);
-                
-                // Добавляем диагностическую информацию
                 eventObj.Set("reportNumber", Napi::Number::New(env, MmsClient::totalReportsProcessed_.load()));
                 eventObj.Set("totalElementsProcessed", Napi::Number::New(env, MmsClient::totalElementsProcessed_.load()));
                 
@@ -4547,12 +4517,8 @@ void MmsClient::ReportCallback(void* parameter, ClientReport report) {
         printf("  No valid items to send to JS\n");
     }
     
-    // Уменьшаем счетчик после отправки
-    client->reportCount_--;
-
     auto endTime = std::chrono::steady_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime);
-    
     printf("  Report processing time: %lld ms\n", duration.count());
     printf("=== ReportCallback END ===\n\n");
 }
