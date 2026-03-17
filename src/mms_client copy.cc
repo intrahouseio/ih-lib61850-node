@@ -76,47 +76,52 @@ namespace {
         ~ReadDataSetModelWorker() {}
 
         void Execute() override {
-            std::lock_guard<std::recursive_mutex> lock(connMutex_);
-
             for (const auto& dsRef : datasetRefs_) {
                 DataSetReadResult res;
                 res.datasetRef = dsRef;
                 res.isValid = false;
-                res.count = 0;
 
-                IedClientError error;
+                // --- Шаг 1: Получение директории DataSet и memberRefs ---
+                std::vector<std::string> memberRefs;
                 bool isDeletable = false;
+                {
+                    std::lock_guard<std::recursive_mutex> lock(connMutex_);
+                    IedClientError error;
+                    LinkedList members = IedConnection_getDataSetDirectory(
+                        connection_, &error, dsRef.c_str(), &isDeletable);
 
-                // 1. Получаем директорию DataSet
-                LinkedList members = IedConnection_getDataSetDirectory(
-                    connection_, &error, dsRef.c_str(), &isDeletable);
-
-                if (error != IED_ERROR_OK || !members) {
-                    res.errorReason = "Cannot get dataset directory, error: " + std::to_string(error);
-                    results_.push_back(res);
-                    continue;
-                }
-
-                // 2. Собираем ссылки на членов DataSet
-                LinkedList entry = members;
-                while (entry) {
-                    if (entry->data) {
-                        char* memberRef = (char*)entry->data;
-                        res.memberRefs.push_back(std::string(memberRef));
+                    if (error != IED_ERROR_OK || !members) {
+                        res.errorReason = "Cannot get dataset directory, error: " + std::to_string(error);
+                        results_.push_back(res);
+                        continue;
                     }
-                    entry = LinkedList_getNext(entry);
+
+                    LinkedList entry = members;
+                    while (entry) {
+                        if (entry->data) {
+                            char* memberRef = (char*)entry->data;
+                            memberRefs.push_back(std::string(memberRef));
+                        }
+                        entry = LinkedList_getNext(entry);
+                    }
+                    LinkedList_destroy(members);
+
+                    // Кэшируем имена членов DataSet
+                    client_->CacheDataSetStructure(dsRef, memberRefs);
                 }
+                res.memberRefs = memberRefs;
 
-                // *** кэшируем имена членов DataSet ***
-                client_->CacheDataSetStructure(dsRef, res.memberRefs);
-
-                // 3. Читаем значения DataSet
-                ClientDataSet clientDataSet = IedConnection_readDataSetValues(
-                    connection_, &error, dsRef.c_str(), nullptr);
+                // --- Шаг 2: Чтение значений DataSet (только вызов под мьютексом) ---
+                IedClientError error;
+                ClientDataSet clientDataSet = nullptr;
+                {
+                    std::lock_guard<std::recursive_mutex> lock(connMutex_);
+                    clientDataSet = IedConnection_readDataSetValues(
+                        connection_, &error, dsRef.c_str(), nullptr);
+                }
 
                 if (error != IED_ERROR_OK || !clientDataSet) {
                     res.errorReason = "Cannot read dataset values, error: " + std::to_string(error);
-                    LinkedList_destroy(members);
                     results_.push_back(res);
                     continue;
                 }
@@ -125,40 +130,44 @@ namespace {
                 if (!valuesArray || MmsValue_getType(valuesArray) != MMS_ARRAY) {
                     res.errorReason = "Invalid dataset values format";
                     ClientDataSet_destroy(clientDataSet);
-                    LinkedList_destroy(members);
                     results_.push_back(res);
                     continue;
                 }
 
                 int arraySize = MmsValue_getArraySize(valuesArray);
-                int elementsToProcess = std::min(arraySize, (int)res.memberRefs.size());
+                int elementsToProcess = std::min(arraySize, (int)memberRefs.size());
                 res.isValid = true;
                 res.isDeletable = isDeletable;
                 res.count = elementsToProcess;
 
-                // 4. Конвертируем каждое значение
+                // Конвертация значений
+                std::vector<MmsClient::ResultData> rawValues;
                 for (int i = 0; i < elementsToProcess; ++i) {
                     MmsValue* val = MmsValue_getElement(valuesArray, i);
                     if (!val) continue;
 
-                    const std::string& fullRef = res.memberRefs[i];
-                    
-                    // Извлекаем имя атрибута из полной ссылки
+                    const std::string& fullRef = memberRefs[i];
                     std::string attrName = fullRef;
                     size_t lastDot = fullRef.rfind('.');
-                    if (lastDot != std::string::npos) {
-                        attrName = fullRef.substr(lastDot + 1);
-                    }
+                    if (lastDot != std::string::npos) attrName = fullRef.substr(lastDot + 1);
 
-                    // Быстрая конвертация MmsValue в ResultData
                     MmsClient::ResultData rd = ConvertMmsValueForReportFast(val, attrName, 0);
-                    res.values.push_back(rd);
+                    rawValues.push_back(rd);
                 }
 
-                // 5. Освобождаем ресурсы
+                // --- Шаг 3: Применение кэшированных имён структур под мьютексом ---
+                {
+                    std::lock_guard<std::recursive_mutex> lock(connMutex_);
+                    for (size_t i = 0; i < rawValues.size(); ++i) {
+                        const std::string& fullRef = memberRefs[i];
+                        if (rawValues[i].type == MMS_STRUCTURE) {
+                            EnhanceResultDataWithCachedNames(client_, rawValues[i], fullRef, 0);
+                        }
+                    }
+                }
+
+                res.values = std::move(rawValues);
                 ClientDataSet_destroy(clientDataSet);
-                LinkedList_destroy(members);
-                
                 results_.push_back(res);
             }
         }
@@ -170,7 +179,6 @@ namespace {
             for (size_t idx = 0; idx < results_.size(); ++idx) {
                 DataSetReadResult& res = results_[idx];
                 Napi::Object obj = Napi::Object::New(env);
-                
                 obj.Set("datasetRef", Napi::String::New(env, res.datasetRef));
                 obj.Set("isValid", Napi::Boolean::New(env, res.isValid));
 
@@ -187,15 +195,8 @@ namespace {
                 Napi::Object memberRefsObj = Napi::Object::New(env);
 
                 for (size_t i = 0; i < res.values.size(); ++i) {
-                    MmsClient::ResultData rd = res.values[i];
+                    const MmsClient::ResultData& rd = res.values[i];
                     const std::string& fullRef = res.memberRefs[i];
-
-                    // Применяем кэшированные имена структур (если есть)
-                    if (rd.type == MMS_STRUCTURE) {
-                        EnhanceResultDataWithCachedNames(client_, rd, fullRef, 0);
-                    }
-
-                    // Конвертируем в Napi значение с именами
                     Napi::Value jsValue = ResultDataToNapiWithNames(env, rd, fullRef);
                     valuesObj.Set(fullRef, jsValue);
                     memberRefsObj.Set(fullRef, Napi::String::New(env, fullRef));
@@ -203,7 +204,6 @@ namespace {
 
                 obj.Set("values", valuesObj);
                 obj.Set("memberRefs", memberRefsObj);
-                
                 resultArray.Set(idx, obj);
             }
 
@@ -256,34 +256,66 @@ namespace {
         ~PollDataSetValuesWorker() {}
 
         void Execute() override {
-            std::lock_guard<std::recursive_mutex> lock(connMutex_);
-
             for (const auto& dsRef : datasetRefs_) {
                 DataSetPollResult res;
                 res.datasetRef = dsRef;
                 res.isValid = false;
-                res.count = 0;
 
-                // 1. Проверяем, есть ли DataSet в кэше
-                auto cacheIt = client_->GetDataSetCache().find(dsRef);
-                if (cacheIt == client_->GetDataSetCache().end()) {
-                    res.errorReason = "DataSet not cached. Please call readDataSetModel first.";
+                std::vector<std::string> memberRefs;
+                // Лог: начало обработки dataset
+                printf("[Worker %p] Processing dataset %s at %lld ms\n", 
+                    this, dsRef.c_str(), 
+                    std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now().time_since_epoch()).count());
+
+                // --- Шаг 1: Получение memberRefs из кэша под мьютексом ---
+                {
+                    std::lock_guard<std::recursive_mutex> lock(connMutex_);
+                    printf("[Worker %p] Lock acquired for cache read at %lld ms\n", 
+                        this, 
+                        std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::steady_clock::now().time_since_epoch()).count());
+
+                    auto cacheIt = client_->GetDataSetCache().find(dsRef);
+                    if (cacheIt == client_->GetDataSetCache().end()) {
+                        res.errorReason = "DataSet not cached";
+                        results_.push_back(res);
+                        continue;
+                    }
+                    memberRefs = cacheIt->second.memberRefs;
+                    printf("[Worker %p] Cache read completed, lock released at %lld ms\n", 
+                        this,
+                        std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::steady_clock::now().time_since_epoch()).count());
+                }
+
+                // --- Шаг 2: Чтение DataSet ---
+                IedClientError error;
+                ClientDataSet clientDataSet = nullptr;
+                {
+                    std::lock_guard<std::recursive_mutex> lock(connMutex_);
+                    printf("[Worker %p] Lock acquired for IedConnection_readDataSetValues at %lld ms\n", 
+                        this,
+                        std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::steady_clock::now().time_since_epoch()).count());
+
+                    auto readStart = std::chrono::steady_clock::now();
+                    clientDataSet = IedConnection_readDataSetValues(
+                        connection_, &error, dsRef.c_str(), nullptr);
+                    auto readEnd = std::chrono::steady_clock::now();
+                    res.readTimeMicros = std::chrono::duration_cast<std::chrono::microseconds>(readEnd - readStart).count();
+
+                    printf("[Worker %p] IedConnection_readDataSetValues completed in %lld µs, lock released at %lld ms\n", 
+                        this, res.readTimeMicros,
+                        std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::steady_clock::now().time_since_epoch()).count());
+                }
+
+                if (error != IED_ERROR_OK || !clientDataSet) {
+                    res.errorReason = "Cannot read dataset values, error: " + std::to_string(error);
                     results_.push_back(res);
                     continue;
                 }
-
-                const DataSetCache& cache = cacheIt->second;
-                res.memberRefs = cache.memberRefs;   // сохраняем для имён
-
-                // 2. Читаем значения DataSet (один сетевой запрос)
-                auto readStart = std::chrono::steady_clock::now();
-
-                IedClientError error;
-                ClientDataSet clientDataSet = IedConnection_readDataSetValues(
-                    connection_, &error, dsRef.c_str(), nullptr);
-
-                auto readEnd = std::chrono::steady_clock::now();
-                res.readTimeMicros = std::chrono::duration_cast<std::chrono::microseconds>(readEnd - readStart).count();
 
                 if (error != IED_ERROR_OK || !clientDataSet) {
                     res.errorReason = "Cannot read dataset values, error: " + std::to_string(error);
@@ -300,27 +332,42 @@ namespace {
                 }
 
                 int arraySize = MmsValue_getArraySize(valuesArray);
-                int elementsToProcess = std::min(arraySize, (int)cache.memberRefs.size());
+                int elementsToProcess = std::min(arraySize, (int)memberRefs.size());
 
                 auto processStart = std::chrono::steady_clock::now();
+
+                // Вектор для сырых ResultData (без имён структур)
+                std::vector<MmsClient::ResultData> rawValues;
+                rawValues.reserve(elementsToProcess);
 
                 for (int i = 0; i < elementsToProcess; ++i) {
                     MmsValue* val = MmsValue_getElement(valuesArray, i);
                     if (!val) continue;
 
-                    const std::string& fullRef = cache.memberRefs[i];
+                    const std::string& fullRef = memberRefs[i];
                     std::string attrName = fullRef;
                     size_t lastDot = fullRef.rfind('.');
                     if (lastDot != std::string::npos) attrName = fullRef.substr(lastDot + 1);
 
-                    // Быстрая конвертация
                     MmsClient::ResultData rd = ConvertMmsValueForReportFast(val, attrName, 0);
-                    res.values.push_back(rd);
+                    rawValues.push_back(rd);
                 }
 
                 auto processEnd = std::chrono::steady_clock::now();
                 res.processTimeMicros = std::chrono::duration_cast<std::chrono::microseconds>(processEnd - processStart).count();
 
+                // --- Шаг 3: Применение кэшированных имён структур под мьютексом ---
+                {
+                    std::lock_guard<std::recursive_mutex> lock(connMutex_);
+                    for (size_t i = 0; i < rawValues.size(); ++i) {
+                        const std::string& fullRef = memberRefs[i];
+                        if (rawValues[i].type == MMS_STRUCTURE) {
+                            EnhanceResultDataWithCachedNames(client_, rawValues[i], fullRef, 0);
+                        }
+                    }
+                }
+
+                res.values = std::move(rawValues);
                 res.isValid = true;
                 res.count = elementsToProcess;
 
@@ -350,20 +397,12 @@ namespace {
                 obj.Set("processTimeMicros", Napi::Number::New(env, static_cast<double>(res.processTimeMicros)));
 
                 Napi::Object valuesObj = Napi::Object::New(env);
-
                 for (size_t i = 0; i < res.values.size(); ++i) {
-                    MmsClient::ResultData rd = res.values[i];
+                    const MmsClient::ResultData& rd = res.values[i];
                     const std::string& fullRef = res.memberRefs[i];
-
-                    // Применяем кэшированные имена структур
-                    if (rd.type == MMS_STRUCTURE) {
-                        EnhanceResultDataWithCachedNames(client_, rd, fullRef, 0);
-                    }
-
                     Napi::Value jsValue = ResultDataToNapiWithNames(env, rd, fullRef);
                     valuesObj.Set(fullRef, jsValue);
                 }
-
                 obj.Set("values", valuesObj);
                 resultArray.Set(idx, obj);
             }
@@ -4198,10 +4237,13 @@ static Napi::Value ResultDataToNapiWithNames(Napi::Env env,
     }
 }
 
-void MmsClient::ReportCallback(void* parameter, ClientReport report) {
+/*void MmsClient::ReportCallback(void* parameter, ClientReport report) {
     MmsClient* client = static_cast<MmsClient*>(parameter);
-    
-    auto startTime = std::chrono::steady_clock::now();
+
+    uint64_t callbackEntryTime = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    printf("[ReportCallback %p] Entered at %llu ms, thread ID: %zu\n", 
+           client, callbackEntryTime, std::hash<std::thread::id>{}(std::this_thread::get_id()));
     MmsClient::totalReportsProcessed_++;
     
     int currentReport = MmsClient::totalReportsProcessed_.load();
@@ -4247,19 +4289,21 @@ void MmsClient::ReportCallback(void* parameter, ClientReport report) {
     }
 
     int dataSetSize = MmsValue_getArraySize(dataSetValues);
-    
     printf("  dataSetValues: type=%d, array size=%d\n", MmsValue_getType(dataSetValues), dataSetSize);
     
-    // Получаем информацию об отчете с блокировкой
-    MmsClient::ReportInfo* reportInfo = nullptr;
+    // Получаем информацию об отчете с блокировкой (копируем нужные данные)
+    ReportInfo* reportInfo = nullptr;
     std::vector<std::string> dataSetMembers;
+    std::unordered_map<std::string, std::vector<std::string>> elementNamesCacheCopy;
     
     {
         std::lock_guard<std::recursive_mutex> lock(client->connMutex_);
         auto it = client->activeReports_.find(rcbRef);
         if (it != client->activeReports_.end()) {
             reportInfo = &it->second;
-            dataSetMembers = reportInfo->dataSetMembers;
+            dataSetMembers = reportInfo->dataSetMembers; // копируем
+            // Копируем кэш имён структур, чтобы в лямбде не зависеть от reportInfo
+            elementNamesCacheCopy = reportInfo->structureElementNamesCache;
             printf("  Found active report, dataSet members: %zu\n", dataSetMembers.size());
         } else {
             printf("  WARNING: ReportInfo not found for %s\n", rcbRef.c_str());
@@ -4278,13 +4322,12 @@ void MmsClient::ReportCallback(void* parameter, ClientReport report) {
     
     bool hasTimestamp = ClientReport_hasTimestamp(report);
     uint64_t timestamp = 0;
-    
     if (hasTimestamp) {
         timestamp = ClientReport_getTimestamp(report);
         printf("  Report has timestamp: %llu ms\n", (unsigned long long)timestamp);
     }
     
-    // Быстрая обработка данных
+    // Структура для хранения обработанных данных
     struct ReportItemData {
         std::string fullRef;
         MmsClient::ResultData resultData;
@@ -4339,23 +4382,17 @@ void MmsClient::ReportCallback(void* parameter, ClientReport report) {
             
             // Для структур статуса [ST] используем стандартные имена
             if (isStatusStructure && size >= 3) {
-                // Стандартная структура статуса: stVal, q, t
                 const char* stdNames[] = {"stVal", "q", "t"};
-                
                 for (int i = 0; i < std::min(size, 3); ++i) {
                     MmsValue* childVal = MmsValue_getElement(val, i);
                     if (childVal) {
-                        // Формируем полную ссылку для дочернего элемента
                         std::string childFullRef = fullRef;
                         if (bracketPos != std::string::npos) {
-                            // Вставляем имя элемента перед [ST]
                             childFullRef = fullRef.substr(0, bracketPos) + "." + stdNames[i] + 
                                          fullRef.substr(bracketPos);
                         } else {
                             childFullRef = fullRef + "." + stdNames[i];
                         }
-                        
-                        // Рекурсивно обрабатываем дочерний элемент
                         MmsClient::ResultData childData = processValueRecursive(childVal, childFullRef, recursionDepth + 1);
                         data.structureElements.push_back(childData);
                         data.structureElementNames.push_back(stdNames[i]);
@@ -4368,7 +4405,6 @@ void MmsClient::ReportCallback(void* parameter, ClientReport report) {
                     if (childVal) {
                         std::string indexName = std::to_string(i);
                         std::string childFullRef = fullRef + "." + indexName;
-                        
                         MmsClient::ResultData childData = processValueRecursive(childVal, childFullRef, recursionDepth + 1);
                         data.structureElements.push_back(childData);
                         data.structureElementNames.push_back(indexName);
@@ -4376,22 +4412,15 @@ void MmsClient::ReportCallback(void* parameter, ClientReport report) {
                 }
             }
         } else {
-            // Для простых типов используем ConvertMmsValueForReportFast с правильным именем
+            // Для простых типов используем ConvertMmsValueForReportFast
             data = ConvertMmsValueForReportFast(val, attrName);
-            
-            // Если это stVal в структуре статуса, убедимся, что имя правильное
-            if (isStatusStructure && attrName.find("stVal") != std::string::npos) {
-                // Уже должно быть обработано в ConvertMmsValueForReportFast
-            }
         }
-        
         return data;
     };
     
     // Обрабатываем данные
     for (int i = 0; i < elementsToProcess; i++) {
         ReasonForInclusion reason = ClientReport_getReasonForInclusion(report, i);
-        
         if (reason == IEC61850_REASON_NOT_INCLUDED) {
             continue;
         }
@@ -4408,25 +4437,39 @@ void MmsClient::ReportCallback(void* parameter, ClientReport report) {
             continue;
         }
         
-        // Обрабатываем значение (рекурсивно для структур)
         try {
             MmsClient::ResultData rd = processValueRecursive(value, fullRef, 0);
-            
             ReportItemData item;
             item.fullRef = fullRef;
-            item.resultData = rd;
+            item.resultData = std::move(rd);
             item.reason = reason;
-            
-            reportItems.push_back(item);
+            reportItems.push_back(std::move(item));
         } catch (const std::exception& e) {
             printf("    [%d] Exception in processValueRecursive: %s\n", i, e.what());
-        } catch (...) {
-            printf("    [%d] Unknown exception in processValueRecursive\n", i);
         }
     }
     
     printf("  Processed %zu items from report\n", reportItems.size());
     MmsClient::totalElementsProcessed_ += reportItems.size();
+    
+    // === ВАЖНО: Применяем кэшированные имена структур (под тем же мьютексом) ===
+    {
+        std::lock_guard<std::recursive_mutex> lock(client->connMutex_);
+        for (auto& item : reportItems) {
+            if (item.resultData.type == MMS_STRUCTURE) {
+                // Используем кэш из копии elementNamesCacheCopy (уже скопирован)
+                // Для этого нам нужна функция, принимающая кэш.
+                // Но проще: у нас есть reportInfo, который мы скопировали? 
+                // Мы скопировали elementNamesCacheCopy, но EnhanceStructureWithCachedNames 
+                // использует reportInfo->structureElementNamesCache.
+                // Чтобы не усложнять, можно передать reportInfo, но гарантировать,
+                // что reportInfo жив до выхода из этой блокировки. В данном случае
+                // reportInfo берётся из activeReports_, и мы всё ещё под мьютексом,
+                // поэтому reportInfo валиден. Применяем имена.
+                EnhanceStructureWithCachedNames(item.resultData, item.fullRef, *reportInfo);
+            }
+        }
+    }
     
     // Отправляем в JS если есть что отправлять
     if (!reportItems.empty() && client->tsfn_) {
@@ -4441,8 +4484,8 @@ void MmsClient::ReportCallback(void* parameter, ClientReport report) {
             }
         }
         
-        // Передаем данные в основной поток
-        auto status = client->tsfn_.NonBlockingCall([client, rcbRef, rptId, timestamp, hasTimestamp, reportItems, reportInfo]
+        // Передаём данные в основной поток (копируем reportItems)
+        auto status = client->tsfn_.NonBlockingCall([client, rcbRef, rptId, timestamp, hasTimestamp, reportItems]
                                                     (Napi::Env env, Napi::Function cb) {
             try {
                 printf("  [TSFN] Processing report in JS thread for RCB: %s\n", rcbRef.c_str());
@@ -4472,15 +4515,8 @@ void MmsClient::ReportCallback(void* parameter, ClientReport report) {
                 
                 for (const auto& item : reportItems) {
                     try {
-                        // Копируем ResultData для применения кэша
-                        MmsClient::ResultData enhancedData = item.resultData;
-                        
-                        // ПРИМЕНЯЕМ КЭШИРОВАННЫЕ ИМЕНА ТОЛЬКО ЗДЕСЬ (в JS потоке)
-                        if (reportInfo && enhancedData.type == MMS_STRUCTURE) {
-                            EnhanceStructureWithCachedNames(enhancedData, item.fullRef, *reportInfo);
-                        }
-                        
-                        Napi::Value jsValue = ResultDataToNapiWithNames(env, enhancedData, item.fullRef);
+                        // item.resultData уже содержит имена элементов (structureElementNames)
+                        Napi::Value jsValue = ResultDataToNapiWithNames(env, item.resultData, item.fullRef);
                         valuesObj.Set(item.fullRef, jsValue);
                         reasonsObj.Set(item.fullRef, item.reason);
                     } catch (const std::exception& e) {
@@ -4492,8 +4528,6 @@ void MmsClient::ReportCallback(void* parameter, ClientReport report) {
                 
                 eventObj.Set("values", valuesObj);
                 eventObj.Set("reasons", reasonsObj);
-                
-                // Добавляем диагностическую информацию
                 eventObj.Set("reportNumber", Napi::Number::New(env, MmsClient::totalReportsProcessed_.load()));
                 eventObj.Set("totalElementsProcessed", Napi::Number::New(env, MmsClient::totalElementsProcessed_.load()));
                 
@@ -4516,9 +4550,440 @@ void MmsClient::ReportCallback(void* parameter, ClientReport report) {
     
     auto endTime = std::chrono::steady_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime);
-    
     printf("  Report processing time: %lld ms\n", duration.count());
     printf("=== ReportCallback END ===\n\n");
+}*/
+
+void MmsClient::ReportCallback(void* parameter, ClientReport report) {
+    MmsClient* client = static_cast<MmsClient*>(parameter);
+    
+    uint64_t callbackEntryTime = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    
+    auto startTime = std::chrono::steady_clock::now();
+    MmsClient::totalReportsProcessed_++;
+    
+    int currentReport = MmsClient::totalReportsProcessed_.load();
+    
+    // Получаем идентификатор потока
+    std::thread::id threadId = std::this_thread::get_id();
+    size_t threadIdHash = std::hash<std::thread::id>{}(threadId);
+    
+    printf("\n=== ReportCallback [REPORT#%d] ===\n", currentReport);
+    printf("  Callback entry time: %llu ms\n", callbackEntryTime);
+    printf("  Thread ID: %zu (0x%zx)\n", threadIdHash, threadIdHash);
+    printf("  clientID: %s\n", client->clientID_.c_str());
+    printf("  client pointer: %p\n", (void*)client);
+    
+    // Быстрая проверка состояния клиента
+    bool isClosing = false;
+    bool isConnected = false;
+    
+    uint64_t stateCheckStart = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    
+    {
+        std::lock_guard<std::recursive_mutex> lock(client->connMutex_);
+        uint64_t lockAcquired = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        
+        if (lockAcquired - stateCheckStart > 10) {
+            printf("  WARNING: State check lock acquisition took %llu ms\n", 
+                   lockAcquired - stateCheckStart);
+        }
+        
+        isClosing = client->isClosing_;
+        isConnected = client->connected_;
+        
+        printf("  State check lock acquired at %llu ms (waited %llu ms)\n", 
+               lockAcquired, lockAcquired - stateCheckStart);
+        printf("  isClosing = %d, isConnected = %d\n", isClosing, isConnected);
+    }
+    
+    if (isClosing) {
+        printf("  Client is closing, skipping report\n");
+        return;
+    }
+    
+    if (!isConnected) {
+        printf("  Client not connected, skipping report\n");
+        return;
+    }
+    
+    // Получаем информацию об отчете
+    const char* rcbRefRaw = ClientReport_getRcbReference(report);
+    const char* rptIdRaw = ClientReport_getRptId(report);
+    std::string rcbRef = rcbRefRaw ? rcbRefRaw : "unknown";
+    std::string rptId = rptIdRaw ? rptIdRaw : "unknown";
+    
+    printf("  Report for RCB: %s, rptId: %s\n", rcbRef.c_str(), rptId.c_str());
+    
+    // Получаем значения DataSet
+    MmsValue* dataSetValues = ClientReport_getDataSetValues(report);
+    
+    if (!dataSetValues) {
+        printf("  ERROR: dataSetValues is NULL\n");
+        return;
+    }
+
+    int dataSetSize = MmsValue_getArraySize(dataSetValues);
+    int dataSetType = MmsValue_getType(dataSetValues);
+    printf("  dataSetValues: type=%d, array size=%d\n", dataSetType, dataSetSize);
+    
+    // Получаем информацию об отчете с блокировкой
+    ReportInfo* reportInfo = nullptr;
+    std::vector<std::string> dataSetMembers;
+    
+    uint64_t reportInfoLockStart = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    
+    {
+        std::lock_guard<std::recursive_mutex> lock(client->connMutex_);
+        uint64_t reportInfoLockAcquired = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        
+        if (reportInfoLockAcquired - reportInfoLockStart > 10) {
+            printf("  WARNING: ReportInfo lock acquisition took %llu ms\n", 
+                   reportInfoLockAcquired - reportInfoLockStart);
+        }
+        
+        printf("  ReportInfo lock acquired at %llu ms (waited %llu ms)\n", 
+               reportInfoLockAcquired, reportInfoLockAcquired - reportInfoLockStart);
+        
+        auto it = client->activeReports_.find(rcbRef);
+        if (it != client->activeReports_.end()) {
+            reportInfo = &it->second;
+            dataSetMembers = reportInfo->dataSetMembers; // копируем
+            printf("  Found active report, dataSet members: %zu, reportInfo ptr: %p\n", 
+                   dataSetMembers.size(), (void*)reportInfo);
+            printf("  structureElementNamesCache size: %zu\n", 
+                   reportInfo->structureElementNamesCache.size());
+        } else {
+            printf("  WARNING: ReportInfo not found for %s\n", rcbRef.c_str());
+            printf("  activeReports_ size: %zu\n", client->activeReports_.size());
+            return;
+        }
+    }
+    
+    if (dataSetMembers.size() != static_cast<size_t>(dataSetSize)) {
+        printf("  WARNING: Members count (%zu) != DataSet size (%d)\n", 
+               dataSetMembers.size(), dataSetSize);
+    }
+    
+    // Ограничиваем обработку для больших отчетов
+    const int MAX_ELEMENTS_TO_PROCESS = 200;
+    int elementsToProcess = std::min(dataSetSize, MAX_ELEMENTS_TO_PROCESS);
+    
+    bool hasTimestamp = ClientReport_hasTimestamp(report);
+    uint64_t timestamp = 0;
+    if (hasTimestamp) {
+        timestamp = ClientReport_getTimestamp(report);
+        printf("  Report has timestamp: %llu ms\n", (unsigned long long)timestamp);
+    }
+    
+    // Структура для хранения обработанных данных
+    struct ReportItemData {
+        std::string fullRef;
+        MmsClient::ResultData resultData;
+        int reason;
+    };
+    
+    std::vector<ReportItemData> reportItems;
+    reportItems.reserve(elementsToProcess);
+    
+    printf("  Starting data processing at %llu ms\n", 
+           std::chrono::duration_cast<std::chrono::milliseconds>(
+               std::chrono::steady_clock::now().time_since_epoch()).count());
+    
+    // Вспомогательная функция для обработки структурных значений
+    std::function<MmsClient::ResultData(MmsValue*, const std::string&, int)> processValueRecursive;
+    processValueRecursive = [&](MmsValue* val, const std::string& fullRef, int recursionDepth) -> MmsClient::ResultData {
+        MmsClient::ResultData data;
+        
+        const int MAX_RECURSION_DEPTH = 5;
+        if (recursionDepth > MAX_RECURSION_DEPTH) {
+            data.type = MMS_STRUCTURE;
+            data.isValid = false;
+            data.errorReason = "Max recursion depth exceeded";
+            return data;
+        }
+        
+        if (!val) {
+            data.type = MMS_DATA_ACCESS_ERROR;
+            data.isValid = false;
+            data.errorReason = "Null value";
+            return data;
+        }
+        
+        data.type = MmsValue_getType(val);
+        data.isValid = true;
+        data.errorReason = "";
+        
+        // Извлекаем имя атрибута из полной ссылки
+        std::string attrName = fullRef;
+        size_t dotPos = fullRef.rfind('.');
+        if (dotPos != std::string::npos) {
+            attrName = fullRef.substr(dotPos + 1);
+        }
+        
+        // Проверяем, является ли это структурой статуса [ST]
+        bool isStatusStructure = false;
+        size_t bracketPos = fullRef.find('[');
+        if (bracketPos != std::string::npos) {
+            std::string fcPart = fullRef.substr(bracketPos);
+            if (fcPart.find("[ST]") != std::string::npos || fcPart.find("[st]") != std::string::npos) {
+                isStatusStructure = true;
+            }
+        }
+        
+        if (data.type == MMS_STRUCTURE) {
+            int size = MmsValue_getArraySize(val);
+            
+            // Для структур статуса [ST] используем стандартные имена
+            if (isStatusStructure && size >= 3) {
+                const char* stdNames[] = {"stVal", "q", "t"};
+                for (int i = 0; i < std::min(size, 3); ++i) {
+                    MmsValue* childVal = MmsValue_getElement(val, i);
+                    if (childVal) {
+                        std::string childFullRef = fullRef;
+                        if (bracketPos != std::string::npos) {
+                            childFullRef = fullRef.substr(0, bracketPos) + "." + stdNames[i] + 
+                                         fullRef.substr(bracketPos);
+                        } else {
+                            childFullRef = fullRef + "." + stdNames[i];
+                        }
+                        MmsClient::ResultData childData = processValueRecursive(childVal, childFullRef, recursionDepth + 1);
+                        data.structureElements.push_back(childData);
+                        data.structureElementNames.push_back(stdNames[i]);
+                    }
+                }
+            } else {
+                // Для нестандартных структур используем индексы
+                for (int i = 0; i < size; ++i) {
+                    MmsValue* childVal = MmsValue_getElement(val, i);
+                    if (childVal) {
+                        std::string indexName = std::to_string(i);
+                        std::string childFullRef = fullRef + "." + indexName;
+                        MmsClient::ResultData childData = processValueRecursive(childVal, childFullRef, recursionDepth + 1);
+                        data.structureElements.push_back(childData);
+                        data.structureElementNames.push_back(indexName);
+                    }
+                }
+            }
+        } else {
+            // Для простых типов используем ConvertMmsValueForReportFast
+            data = ConvertMmsValueForReportFast(val, attrName);
+        }
+        return data;
+    };
+    
+    // Обрабатываем данные
+    int itemsProcessed = 0;
+    for (int i = 0; i < elementsToProcess; i++) {
+        ReasonForInclusion reason = ClientReport_getReasonForInclusion(report, i);
+        if (reason == IEC61850_REASON_NOT_INCLUDED) {
+            continue;
+        }
+        
+        std::string fullRef;
+        if (i < static_cast<int>(dataSetMembers.size())) {
+            fullRef = dataSetMembers[i];
+        } else {
+            fullRef = "unknown[" + std::to_string(i) + "]";
+        }
+        
+        MmsValue* value = MmsValue_getElement(dataSetValues, i);
+        if (!value) {
+            printf("    [%d] WARNING: value is NULL for %s\n", i, fullRef.c_str());
+            continue;
+        }
+        
+        try {
+            uint64_t itemStart = std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count();
+            
+            MmsClient::ResultData rd = processValueRecursive(value, fullRef, 0);
+            
+            uint64_t itemEnd = std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count();
+            
+            ReportItemData item;
+            item.fullRef = fullRef;
+            item.resultData = std::move(rd);
+            item.reason = reason;
+            reportItems.push_back(std::move(item));
+            itemsProcessed++;
+            
+            if (itemsProcessed <= 5) { // Логируем только первые 5 элементов для отладки
+                printf("    [%d] %s processed in %llu µs, type=%d\n", 
+                       i, fullRef.c_str(), itemEnd - itemStart, item.resultData.type);
+            }
+        } catch (const std::exception& e) {
+            printf("    [%d] Exception in processValueRecursive for %s: %s\n", 
+                   i, fullRef.c_str(), e.what());
+        }
+    }
+    
+    uint64_t processingEnd = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    
+    printf("  Data processing completed at %llu ms\n", processingEnd);
+    printf("  Processed %zu items from report (%d items with data)\n", 
+           reportItems.size(), itemsProcessed);
+    
+    MmsClient::totalElementsProcessed_ += reportItems.size();
+    
+    // === Применяем кэшированные имена структур (под мьютексом) ===
+    if (reportInfo && !reportItems.empty()) {
+        uint64_t enhanceStart = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        
+        {
+            std::lock_guard<std::recursive_mutex> lock(client->connMutex_);
+            uint64_t enhanceLockAcquired = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count();
+            
+            printf("  EnhanceStructure lock acquired at %llu ms (waited %llu ms)\n", 
+                   enhanceLockAcquired, enhanceLockAcquired - enhanceStart);
+            
+            int enhancedCount = 0;
+            for (auto& item : reportItems) {
+                if (item.resultData.type == MMS_STRUCTURE) {
+                    EnhanceStructureWithCachedNames(item.resultData, item.fullRef, *reportInfo);
+                    enhancedCount++;
+                }
+            }
+            printf("  Enhanced %d structures with cached names\n", enhancedCount);
+        }
+        
+        uint64_t enhanceEnd = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        printf("  Structure enhancement completed in %llu ms\n", enhanceEnd - enhanceStart);
+    }
+    
+    // Отправляем в JS если есть что отправлять
+    if (!reportItems.empty() && client->tsfn_) {
+        printf("  Sending report event to JS...\n");
+        
+        // Проверяем состояние соединения перед отправкой
+        {
+            std::lock_guard<std::recursive_mutex> lock(client->connMutex_);
+            if (!client->connected_ || client->isClosing_) {
+                printf("  Client disconnected or closing, skipping send to JS\n");
+                return;
+            }
+        }
+        
+        uint64_t tsfnStart = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        
+        // Передаём данные в основной поток (копируем reportItems)
+        auto status = client->tsfn_.NonBlockingCall([client, rcbRef, rptId, timestamp, hasTimestamp, reportItems, currentReport]
+                                                    (Napi::Env env, Napi::Function cb) {
+            uint64_t tsfnEntry = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count();
+            
+            printf("  [TSFN #%d] Entered at %llu ms, thread ID: %zu\n", 
+                   currentReport, tsfnEntry, 
+                   std::hash<std::thread::id>{}(std::this_thread::get_id()));
+            
+            try {
+                // Проверяем, не закрывается ли клиент
+                {
+                    std::lock_guard<std::recursive_mutex> lock(client->connMutex_);
+                    if (client->isClosing_) {
+                        printf("  [TSFN #%d] Skipping report - client is closing\n", currentReport);
+                        return;
+                    }
+                }
+                
+                Napi::Object eventObj = Napi::Object::New(env);
+                eventObj.Set("clientID", Napi::String::New(env, client->clientID_.c_str()));
+                eventObj.Set("type", "data");
+                eventObj.Set("event", "report");
+                eventObj.Set("rcbRef", Napi::String::New(env, rcbRef));
+                eventObj.Set("rptId", Napi::String::New(env, rptId));
+                
+                if (hasTimestamp) {
+                    eventObj.Set("timestamp", Napi::Number::New(env, static_cast<double>(timestamp)));
+                }
+                
+                Napi::Object valuesObj = Napi::Object::New(env);
+                Napi::Object reasonsObj = Napi::Object::New(env);
+                
+                int itemCount = 0;
+                for (const auto& item : reportItems) {
+                    try {
+                        // item.resultData уже содержит имена элементов (structureElementNames)
+                        Napi::Value jsValue = ResultDataToNapiWithNames(env, item.resultData, item.fullRef);
+                        valuesObj.Set(item.fullRef, jsValue);
+                        reasonsObj.Set(item.fullRef, item.reason);
+                        itemCount++;
+                    } catch (const std::exception& e) {
+                        printf("  [TSFN #%d] Exception converting item %s: %s\n", 
+                               currentReport, item.fullRef.c_str(), e.what());
+                        valuesObj.Set(item.fullRef, Napi::String::New(env, "Conversion Exception"));
+                        reasonsObj.Set(item.fullRef, item.reason);
+                    }
+                }
+                
+                eventObj.Set("values", valuesObj);
+                eventObj.Set("reasons", reasonsObj);
+                eventObj.Set("reportNumber", Napi::Number::New(env, currentReport));
+                eventObj.Set("itemsInReport", Napi::Number::New(env, itemCount));
+                eventObj.Set("totalElementsProcessed", Napi::Number::New(env, MmsClient::totalElementsProcessed_.load()));
+                
+                uint64_t tsfnCallStart = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now().time_since_epoch()).count();
+                
+                cb.Call({Napi::String::New(env, "data"), eventObj});
+                
+                uint64_t tsfnCallEnd = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now().time_since_epoch()).count();
+                
+                printf("  [TSFN #%d] JS callback executed in %llu ms\n", 
+                       currentReport, tsfnCallEnd - tsfnCallStart);
+                
+            } catch (const std::exception& e) {
+                printf("  [TSFN #%d] std::exception: %s\n", currentReport, e.what());
+            } catch (...) {
+                printf("  [TSFN #%d] Unknown exception\n", currentReport);
+            }
+            
+            uint64_t tsfnExit = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count();
+            printf("  [TSFN #%d] Exited at %llu ms (total time in TSFN: %llu ms)\n", 
+                   currentReport, tsfnExit, tsfnExit - tsfnEntry);
+        });
+        
+        uint64_t tsfnEnd = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        
+        if (status != napi_ok) {
+            printf("  ERROR: Failed to queue report to TSFN, status: %d\n", status);
+        } else {
+            printf("  Report queued to TSFN successfully at %llu ms (queue time: %llu ms)\n", 
+                   tsfnEnd, tsfnEnd - tsfnStart);
+        }
+    } else {
+        if (reportItems.empty()) {
+            printf("  No valid items to send to JS (reportItems empty)\n");
+        }
+        if (!client->tsfn_) {
+            printf("  TSFN is null, cannot send to JS\n");
+        }
+    }
+    
+    auto endTime = std::chrono::steady_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime);
+    
+    uint64_t callbackExitTime = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    
+    printf("  Report total processing time: %lld ms\n", duration.count());
+    printf("  Callback total time: %llu ms (from entry to exit)\n", 
+           callbackExitTime - callbackEntryTime);
+    printf("=== ReportCallback [REPORT#%d] END ===\n\n", currentReport);
 }
 
 Napi::Value MmsClient::EnableReporting(const Napi::CallbackInfo& info) {
