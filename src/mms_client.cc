@@ -32,6 +32,11 @@ static MmsClient::ResultData ConvertMmsValueForReportFast(MmsValue* val, const s
 static void EnhanceResultDataWithCachedNames(MmsClient* client, MmsClient::ResultData& data, const std::string& fullRef, int depth);
 static Napi::Value ResultDataToNapiWithNames(Napi::Env env, const MmsClient::ResultData& data, const std::string& attrName);
 static FunctionalConstraint ParseFCFromString(const std::string& fcStr);
+static void RecursiveCacheStructureElements(IedConnection connection,
+                                          MmsClient* client,
+                                          const std::string& baseRef,
+                                          FunctionalConstraint fc,
+                                          int recursionDepth);
 
 // Инициализация статических переменных класса MmsClient
 std::atomic<int> MmsClient::totalReportsProcessed_(0);
@@ -418,7 +423,6 @@ namespace {
         ~ReadDataWorker() {}
 
         void Execute() override {
-            // Для каждой ссылки выполняем чтение
             for (const auto& ref : dataRefs_) {
                 ReadDataResult res;
                 res.dataRef = ref;
@@ -483,22 +487,49 @@ namespace {
                 }
 
                 // --- Шаг 3: Конвертация значения в ResultData (без мьютекса) ---
-                // Для простых типов используем ConvertMmsValueForReportFast,
-                // но для структур нам понадобится кэш имён.
                 std::string attrName = actualRef;
                 size_t lastDot = actualRef.rfind('.');
                 if (lastDot != std::string::npos) attrName = actualRef.substr(lastDot + 1);
-                // Добавляем информацию о FC к имени атрибута для правильной обработки структур
-                if (usedFc != IEC61850_FC_NONE) {
-                    attrName += "[" + std::to_string(usedFc) + "]";
-                }
-
+                
+                // Формируем полную ссылку с FC для кэширования
+                std::string fullRefWithFc = actualRef + "[" + std::to_string(usedFc) + "]";
+                
+                // Конвертируем значение во временную структуру с числовыми индексами
                 MmsClient::ResultData rd = ConvertMmsValueForReportFast(value, attrName, 0);
 
-                // --- Шаг 4: Применение кэшированных имён структур (под мьютексом) ---
-                if (rd.type == MMS_STRUCTURE) {
+                // --- Шаг 4: Работа с кэшем под мьютексом ---
+                {
                     std::lock_guard<std::recursive_mutex> lock(connMutex_);
-                    EnhanceResultDataWithCachedNames(client_, rd, ref, 0);
+
+                    // Если это структура, проверяем наличие кэша и при необходимости заполняем
+                    if (rd.type == MMS_STRUCTURE) {
+                        std::vector<std::string> elementNames;
+                        bool hasCache = client_->GetCachedElementNames(actualRef, usedFc, elementNames);
+
+                        if (!hasCache) {
+                            // Кэш отсутствует – запрашиваем спецификацию с сервера и заполняем кэш
+                            printf("  [ReadDataWorker] Cache miss for %s, requesting structure info...\n", 
+                                fullRefWithFc.c_str());
+                            
+                            // RecursiveCacheStructureElements заполнит кэш для этой структуры и всех вложенных
+                            RecursiveCacheStructureElements(connection_, client_, actualRef, usedFc, 0);
+                            
+                            printf("  [ReadDataWorker] Cache populated for %s\n", fullRefWithFc.c_str());
+                        }
+
+                        // Теперь применяем кэшированные имена к структуре
+                        // EnhanceResultDataWithCachedNames использует client_->GetCachedElementNames внутри
+                        EnhanceResultDataWithCachedNames(client_, rd, fullRefWithFc, 0);
+                        
+                        // Для отладки выведем полученные имена
+                        if (!rd.structureElementNames.empty()) {
+                            printf("  [ReadDataWorker] Structure %s has %zu elements with names:\n", 
+                                fullRefWithFc.c_str(), rd.structureElementNames.size());
+                            for (size_t i = 0; i < rd.structureElementNames.size() && i < 3; ++i) {
+                                printf("    [%zu] %s\n", i, rd.structureElementNames[i].c_str());
+                            }
+                        }
+                    }
                 }
 
                 res.isValid = true;
