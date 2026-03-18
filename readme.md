@@ -232,7 +232,7 @@ Contributions are welcome! To contribute:
 
 ## 📜 License
 
-This project is licensed under the [MIT License](https://github.com/intrahouseio/ih-lib61850-node/blob/main/LICENSE).
+This project is licensed under the GNU General Public License v3.0. See the [LICENSE](https://github.com/intrahouseio/ih-lib61850-node/LICENSE.txt) file for details.
 
 ---
 
