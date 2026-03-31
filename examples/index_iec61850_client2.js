@@ -4,12 +4,6 @@ const util = require('util');
 const client = new MmsClient((event, data) => {
     console.log(`Event: ${event}, Data: ${util.inspect(data, { depth: null })}`);
 
-    /*if (event === 'conn' && data.event === 'opened') {
-        console.log('Connection opened, browsing data model...');
-        //handleConnectionOpened();
-        handleConnectionOpened2();
-    }*/
-
     if (event === 'conn' && data.event === 'opened') {
         console.log('Connection opened');
         // Теперь пользователь сам решит, как исследовать модель
@@ -28,7 +22,6 @@ const client = new MmsClient((event, data) => {
         // Автоматически получаем корневые узлы для примера
         exploreModel();
     }
-
 
     if (event === 'data' && data.type === 'data') {
         if (data.event === 'logicalDevices') {
@@ -248,94 +241,81 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 }*/
 
 async function handleConnectionOpened() {    
-        try {
-            const dataModel = await client.browseDataModel();
+    try {
+        const dataModel = await client.browseDataModel();
+        
+        const dataSets = [];
+        const reports = [];
+        
+        dataModel.forEach(ld => {
+            console.log(`\nLogical Device: ${ld.name}`);
             
-            const dataSets = [];
-            const reports = [];
-            
-            dataModel.forEach(ld => {
-                console.log(`\nLogical Device: ${ld.name}`);
+            ld.logicalNodes.forEach(ln => {
+                console.log(`  Logical Node: ${ln.name} (${ln.reference})`);
                 
-                ld.logicalNodes.forEach(ln => {
-                    console.log(`  Logical Node: ${ln.name} (${ln.reference})`);
-                    
-                    // Вывод DataSets
-                    if (ln.dataSets && ln.dataSets.length > 0) {
-                        console.log(`    Datasets (${ln.dataSets.length}):`);
-                        ln.dataSets.forEach(ds => {
-                            console.log(`      - ${ds.reference} (Deletable: ${ds.isDeletable})`);
-                            dataSets.push(ds);
-                        });
-                    }
-                    
-                    // Вывод отчетов (Report Control Blocks)
-                    if (ln.reports && ln.reports.length > 0) {
-                        console.log(`    Reports (${ln.reports.length}):`);
-                        ln.reports.forEach((report, index) => {
-                            console.log(`      [${index + 1}] ${report.reference}`);
-                            console.log(`          Type: ${report.type} (${report.description || 'N/A'})`);
-                            if (report.datasetRef) {
-                                console.log(`          Dataset: ${report.datasetRef}`);
-                            }
-                            if (report.reportId) {
-                                console.log(`          Report ID: ${report.reportId}`);
-                            }
-                            console.log(`          Enabled: ${report.enabled !== undefined ? report.enabled : 'Unknown'}`);
-                            reports.push(report);
-                        });
-                    } else {
-                        console.log(`    No reports found`);
-                    }
-                });
-            });
-    
-            console.log('\n=== SUMMARY ===');
-            console.log(`Total Logical Devices: ${dataModel.length}`);
-            
-            let totalDataSets = 0;
-            let totalReports = 0;
-            
-            dataModel.forEach(ld => {
-                ld.logicalNodes.forEach(ln => {
-                    totalDataSets += (ln.dataSets ? ln.dataSets.length : 0);
-                    totalReports += (ln.reports ? ln.reports.length : 0);
-                });
-            });
-            
-            console.log(`Total Datasets found: ${totalDataSets}`);
-            console.log(`Total Reports found: ${totalReports}`);
-            
-            // Выводим все найденные отчеты для удобства
-            console.log('\n=== ALL FOUND REPORTS ===');
-            reports.forEach((report, index) => {
-                const enabledStatus = report.enabled !== undefined ? 
-                    (report.enabled ? 'ENABLED' : 'DISABLED') : 'UNKNOWN';
-                console.log(`${index + 1}. ${report.reference} (${report.type}) - ${enabledStatus}`);
-                if (report.datasetRef) {
-                    console.log(`   Dataset: ${report.datasetRef}`);
+                // Вывод DataSets (только то, что доступно в корневом обходе)
+                if (ln.dataSets && ln.dataSets.length > 0) {
+                    console.log(`    Datasets (${ln.dataSets.length}):`);
+                    ln.dataSets.forEach(ds => {
+                        console.log(`      - ${ds.reference}`);
+                        dataSets.push(ds);
+                    });
+                }
+                
+                // Вывод отчетов (только то, что доступно в корневом обходе)
+                if (ln.reports && ln.reports.length > 0) {
+                    console.log(`    Reports (${ln.reports.length}):`);
+                    ln.reports.forEach((report, index) => {
+                        console.log(`      [${index + 1}] ${report.reference}`);
+                        console.log(`          Type: ${report.type} (${report.description || 'N/A'})`);
+                        reports.push(report);
+                    });
+                } else {
+                    console.log(`    No reports found`);
                 }
             });
-    
-            console.log('\n=== RECOMMENDED REPORTS FOR ENABLING ===');
-            // Ищем отчеты с DataSet02 (как в примере)
-            const recommendedReports = reports.filter(r => 
-                r.datasetRef && r.datasetRef.includes('DataSet01')
-            );
-            
-            if (recommendedReports.length > 0) {
-                recommendedReports.forEach((report, index) => {
-                    console.log(`${index + 1}. ${report.reference}`);
-                    console.log(`   Dataset: ${report.datasetRef}`);
-                    console.log(`   To enable: client.enableReporting("${report.reference}", "${report.datasetRef}")`);
-                });
-            } else {
-                console.log('No reports with DataSet01 found.');
-                // Предлагаем другие отчеты
-                if (reports.length > 0) {
-                    console.log('\nAvailable reports with datasets:');
-                    reports.filter(r => r.datasetRef).forEach((report, index) => {
-                        console.log(`${index + 1}. ${report.reference} -> ${report.datasetRef}`);                  
+        });
+
+        console.log('\n=== SUMMARY ===');
+        console.log(`Total Logical Devices: ${dataModel.length}`);
+        
+        let totalDataSets = 0;
+        let totalReports = 0;
+        
+        dataModel.forEach(ld => {
+            ld.logicalNodes.forEach(ln => {
+                totalDataSets += (ln.dataSets ? ln.dataSets.length : 0);
+                totalReports += (ln.reports ? ln.reports.length : 0);
+            });
+        });
+        
+        console.log(`Total Datasets found: ${totalDataSets}`);
+        console.log(`Total Reports found: ${totalReports}`);
+        
+        // Выводим все найденные отчеты для удобства
+        console.log('\n=== ALL FOUND REPORTS ===');
+        reports.forEach((report, index) => {
+            console.log(`${index + 1}. ${report.reference} (${report.type})`);
+        });
+
+        console.log('\n=== RECOMMENDED REPORTS FOR ENABLING ===');
+        // Ищем отчеты с DataSet01 (как в примере)
+        const recommendedReports = reports.filter(r => 
+            r.reference.includes('ReportBlock0101')
+        );
+        
+        if (recommendedReports.length > 0) {
+            recommendedReports.forEach((report, index) => {
+                console.log(`${index + 1}. ${report.reference}`);
+                console.log(`   To enable: client.enableReporting("${report.reference}", "<datasetRef>")`);
+                console.log(`   (Get datasetRef by calling browseDataModel("${report.reference}"))`);
+            });
+        } else {
+            console.log('No reports with ReportBlock0101 found.');
+            if (reports.length > 0) {
+                console.log('\nAvailable reports:');
+                reports.forEach((report, index) => {
+                    console.log(`${index + 1}. ${report.reference} -> ${report.type}`);
                 });
             }
         }
@@ -719,10 +699,6 @@ async function main() {
 
         console.log('Waiting for data and reports...');
         await sleep(30000);
-
-        /*const rcbRef = 'A01LD0/LLN0.BR.repTS1';
-        console.log(`Disabling reporting for ${rcbRef}`);
-        await client.disableReporting(rcbRef);*/
 
         const rcbRef2 = 'WAGO61850ServerDevice/LLN0.RP.ReportBlock0101';
         console.log(`Disabling reporting for ${rcbRef2}`);
