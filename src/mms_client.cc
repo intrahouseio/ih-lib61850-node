@@ -136,14 +136,12 @@ namespace {
         ReportDetails report;
     };
 
-    // Получить список логических устройств и узлов (корневой обход)
+    // Получить список логических устройств и узлов (только имена, без подробностей)
     static std::vector<LogicalNodeInfo> GetRootNodesWorker(IedConnection connection,
-                                                        std::recursive_mutex& mutex,
-                                                        MmsClient* client) {
+                                                        std::recursive_mutex& mutex) {
         std::vector<LogicalNodeInfo> result;
-        IedClientError error;
 
-        // Получаем список логических устройств
+        IedClientError error;
         LinkedList deviceList = nullptr;
         {
             std::lock_guard<std::recursive_mutex> lock(mutex);
@@ -155,7 +153,6 @@ namespace {
         while (device) {
             char* ldName = (char*)device->data;
             if (ldName) {
-                // Получаем список логических узлов устройства
                 LinkedList nodeList = nullptr;
                 {
                     std::lock_guard<std::recursive_mutex> lock(mutex);
@@ -171,7 +168,7 @@ namespace {
                             lnInfo.name = lnName;
                             lnInfo.reference = lnRef;
 
-                            // Получаем DataSets этого узла
+                            // Получаем DataSets этого узла (только имена)
                             LinkedList dataSetList = nullptr;
                             {
                                 std::lock_guard<std::recursive_mutex> lock(mutex);
@@ -182,19 +179,18 @@ namespace {
                                 while (ds) {
                                     char* dsName = (char*)ds->data;
                                     if (dsName) {
-                                        std::string dsRef = lnRef + "." + dsName;
-                                        DataSetInfo dsInfo;
-                                        dsInfo.name = dsName;
-                                        dsInfo.reference = dsRef;
-                                        dsInfo.type = "dataset";
-                                        lnInfo.dataSets.push_back(dsInfo);
+                                        DataSetInfo dsi;
+                                        dsi.name = dsName;
+                                        dsi.reference = lnRef + "." + dsName;
+                                        dsi.type = "dataset";
+                                        lnInfo.dataSets.push_back(dsi);
                                     }
                                     ds = LinkedList_getNext(ds);
                                 }
                                 LinkedList_destroy(dataSetList);
                             }
 
-                            // Получаем Reports этого узла
+                            // Получаем Reports этого узла (RCB)
                             LinkedList varList = nullptr;
                             {
                                 std::lock_guard<std::recursive_mutex> lock(mutex);
@@ -208,12 +204,12 @@ namespace {
                                         std::string varStr(varName);
                                         if ((varStr.find("RP$") == 0 || varStr.find("BR$") == 0) &&
                                             std::count(varStr.begin(), varStr.end(), '$') == 1) {
-                                            ReportInfo rptInfo;
-                                            rptInfo.name = varName;
-                                            rptInfo.reference = lnRef + "." + varName;
-                                            rptInfo.type = (varStr.find("RP$") == 0) ? "RP" : "BR";
-                                            rptInfo.description = (rptInfo.type == "RP") ? "Unbuffered Report" : "Buffered Report";
-                                            lnInfo.reports.push_back(rptInfo);
+                                            ReportInfo rpt;
+                                            rpt.name = varName;
+                                            rpt.reference = lnRef + "." + varName;
+                                            rpt.type = (varStr.find("RP$") == 0) ? "RP" : "BR";
+                                            rpt.description = (rpt.type == "RP") ? "Unbuffered Report" : "Buffered Report";
+                                            lnInfo.reports.push_back(rpt);
                                         }
                                     }
                                     var = LinkedList_getNext(var);
@@ -237,7 +233,6 @@ namespace {
     // Получить детали логического узла
     static LogicalNodeDetails GetLogicalNodeDetailsWorker(IedConnection connection,
                                                         std::recursive_mutex& mutex,
-                                                        MmsClient* client,
                                                         const std::string& lnRef) {
         LogicalNodeDetails details;
         details.reference = lnRef;
@@ -261,7 +256,6 @@ namespace {
                 char* doName = (char*)doItem->data;
                 if (doName) {
                     std::string doNameStr(doName);
-                    // Пропускаем отчёты (они содержат $)
                     if (doNameStr.find("RP$") == 0 || doNameStr.find("BR$") == 0) {
                         doItem = LinkedList_getNext(doItem);
                         continue;
@@ -270,7 +264,7 @@ namespace {
                     doi.name = doName;
                     doi.reference = lnRef + "." + doName;
 
-                    // Определяем CDC по имени
+                    // Определяем CDC по имени (без мьютекса)
                     std::string lower = doNameStr;
                     std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
                     if (lower.find("pos") != std::string::npos || lower.find("swi") != std::string::npos)
@@ -326,7 +320,7 @@ namespace {
         return details;
     }
 
-    // Получить детали DataSet
+    // Получить детали DataSet (с возможностью кэширования)
     static DataSetDetails GetDataSetDetailsWorker(IedConnection connection,
                                                 std::recursive_mutex& mutex,
                                                 MmsClient* client,
@@ -341,11 +335,13 @@ namespace {
 
         details.isValid = true;
 
-        // Проверяем, закэширован ли уже DataSet
+        // Проверка кэша (под мьютексом)
+        bool cached = false;
         {
             std::lock_guard<std::recursive_mutex> lock(mutex);
             auto it = client->GetDataSetCache().find(dsRef);
             if (it != client->GetDataSetCache().end()) {
+                cached = true;
                 details.alreadyCached = true;
                 details.isDeletable = false; // не известно из кэша
                 details.memberCount = it->second.memberRefs.size();
@@ -356,9 +352,9 @@ namespace {
                         memberName = memberRef.substr(lastDot + 1);
                     details.members.emplace_back(memberRef, memberName);
                 }
-                return details;
             }
         }
+        if (cached) return details;
 
         details.alreadyCached = false;
         IedClientError error;
@@ -392,7 +388,7 @@ namespace {
         LinkedList_destroy(members);
         details.memberCount = memberRefs.size();
 
-        // Кэшируем структуры для этого DataSet
+        // Кэшируем структуры (под мьютексом)
         {
             std::lock_guard<std::recursive_mutex> lock(mutex);
             client->CacheDataSetStructure(dsRef, memberRefs);
@@ -401,7 +397,7 @@ namespace {
         return details;
     }
 
-    // Получить детали отчета
+    // Получить детали отчета (с возможностью кэширования)
     static ReportDetails GetReportDetailsWorker(IedConnection connection,
                                                 std::recursive_mutex& mutex,
                                                 MmsClient* client,
@@ -414,7 +410,6 @@ namespace {
         else
             details.name = rRef;
 
-        // Тип отчета
         if (rRef.find("RP$") != std::string::npos)
             details.reportType = "RP";
         else if (rRef.find("BR$") != std::string::npos)
@@ -437,17 +432,15 @@ namespace {
             return details;
         }
 
-        // Получаем связанный DataSet
         const char* datasetRefRaw = ClientReportControlBlock_getDataSetReference(rcb);
         if (datasetRefRaw) {
             details.datasetRef = datasetRefRaw;
             details.originalDatasetRef = datasetRefRaw;
-            // Нормализуем имя (заменяем $ на .)
             std::string normalized = details.datasetRef;
             std::replace(normalized.begin(), normalized.end(), '$', '.');
             details.datasetRef = normalized;
 
-            // Проверяем, закэширован ли DataSet
+            // Проверяем кэш
             bool cached = false;
             {
                 std::lock_guard<std::recursive_mutex> lock(mutex);
@@ -513,16 +506,16 @@ namespace {
 
         void Execute() override {
             if (ref_.empty()) {
-                // Корневой обход
+                // Корневой обход – выполняется без удержания мьютекса на всё время
                 result_.type = BrowseResult::ROOT_NODES;
-                result_.rootNodes = GetRootNodesWorker(connection_, connMutex_, client_);
+                result_.rootNodes = GetRootNodesWorker(connection_, connMutex_);
             } else {
                 // Определяем тип по ссылке
                 size_t dotPos = ref_.find('.');
                 if (dotPos == std::string::npos) {
-                    // Это логический узел
+                    // Логический узел
                     result_.type = BrowseResult::LOGICAL_NODE;
-                    result_.logicalNode = GetLogicalNodeDetailsWorker(connection_, connMutex_, client_, ref_);
+                    result_.logicalNode = GetLogicalNodeDetailsWorker(connection_, connMutex_, ref_);
                 } else {
                     // Есть точка – может быть DO, DS или Report
                     std::string objectPart = ref_.substr(dotPos + 1);
@@ -539,20 +532,18 @@ namespace {
                         result_.type = BrowseResult::DATA_SET;
                         result_.dataSet = GetDataSetDetailsWorker(connection_, connMutex_, client_, ref_);
                     } else if (objectPart.find('$') != std::string::npos) {
-                        // Содержит $ – это Report
+                        // Report
                         result_.type = BrowseResult::REPORT;
                         result_.report = GetReportDetailsWorker(connection_, connMutex_, client_, ref_);
                     } else {
-                        // Иначе DataObject
+                        // DataObject
                         result_.type = BrowseResult::DATA_OBJECT;
-                        // Пока просто сохраняем ссылку и имя
                         result_.dataObject.reference = ref_;
                         size_t lastDot = ref_.rfind('.');
                         if (lastDot != std::string::npos)
                             result_.dataObject.name = ref_.substr(lastDot + 1);
                         else
                             result_.dataObject.name = ref_;
-                        // TODO: при необходимости можно добавить получение атрибутов
                     }
                 }
             }
@@ -571,7 +562,6 @@ namespace {
                         obj.Set("name", Napi::String::New(env, ln.name));
                         obj.Set("reference", Napi::String::New(env, ln.reference));
 
-                        // DataSets
                         Napi::Array dsArr = Napi::Array::New(env, ln.dataSets.size());
                         for (size_t j = 0; j < ln.dataSets.size(); ++j) {
                             Napi::Object dsObj = Napi::Object::New(env);
@@ -582,7 +572,6 @@ namespace {
                         }
                         obj.Set("dataSets", dsArr);
 
-                        // Reports
                         Napi::Array rptArr = Napi::Array::New(env, ln.reports.size());
                         for (size_t j = 0; j < ln.reports.size(); ++j) {
                             Napi::Object rptObj = Napi::Object::New(env);
@@ -607,7 +596,6 @@ namespace {
                     obj.Set("reference", Napi::String::New(env, ln.reference));
                     obj.Set("name", Napi::String::New(env, ln.name));
 
-                    // DataObjects
                     Napi::Array doArr = Napi::Array::New(env, ln.dataObjects.size());
                     for (size_t i = 0; i < ln.dataObjects.size(); ++i) {
                         Napi::Object doObj = Napi::Object::New(env);
@@ -620,7 +608,6 @@ namespace {
                     obj.Set("dataObjects", doArr);
                     obj.Set("dataObjectsCount", Napi::Number::New(env, ln.dataObjectsCount));
 
-                    // DataSets
                     Napi::Array dsArr = Napi::Array::New(env, ln.dataSets.size());
                     for (size_t i = 0; i < ln.dataSets.size(); ++i) {
                         Napi::Object dsObj = Napi::Object::New(env);
@@ -642,7 +629,6 @@ namespace {
                     obj.Set("type", Napi::String::New(env, "dataObject"));
                     obj.Set("reference", Napi::String::New(env, dobj.reference));
                     obj.Set("name", Napi::String::New(env, dobj.name));
-                    // Пока без атрибутов
                     deferred_.Resolve(obj);
                     break;
                 }

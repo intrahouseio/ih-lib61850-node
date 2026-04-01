@@ -32,6 +32,11 @@ static MmsClient::ResultData ConvertMmsValueForReportFast(MmsValue* val, const s
 static void EnhanceResultDataWithCachedNames(MmsClient* client, MmsClient::ResultData& data, const std::string& fullRef, int depth);
 static Napi::Value ResultDataToNapiWithNames(Napi::Env env, const MmsClient::ResultData& data, const std::string& attrName);
 static FunctionalConstraint ParseFCFromString(const std::string& fcStr);
+static void RecursiveCacheStructureElements(IedConnection connection,
+                                          MmsClient* client,
+                                          const std::string& baseRef,
+                                          FunctionalConstraint fc,
+                                          int recursionDepth);
 
 // Инициализация статических переменных класса MmsClient
 std::atomic<int> MmsClient::totalReportsProcessed_(0);
@@ -46,6 +51,676 @@ struct ElementInfo {
 };
 
 namespace {
+    // Структуры для хранения результатов обхода модели (используются в BrowseDataModelWorker)
+
+    struct DataSetInfo {
+        std::string name;
+        std::string reference;
+        std::string type; // "dataset"
+    };
+
+    struct ReportInfo {
+        std::string name;
+        std::string reference;
+        std::string type; // "RP" или "BR"
+        std::string description;
+    };
+
+    struct DataObjectInfo {
+        std::string name;
+        std::string reference;
+        std::string cdc; // тип CDC (DPC, SPS, MV и т.д.)
+    };
+
+    struct LogicalNodeInfo {
+        std::string name;
+        std::string reference;
+        std::vector<DataObjectInfo> dataObjects;
+        std::vector<DataSetInfo> dataSets;
+        std::vector<ReportInfo> reports;
+    };
+
+    // Детали для логического узла (используются при передаче конкретной ссылки)
+    struct LogicalNodeDetails {
+        std::string reference;
+        std::string name;
+        std::vector<DataObjectInfo> dataObjects;
+        std::vector<DataSetInfo> dataSets;
+        int dataObjectsCount;
+        int dataSetsCount;
+    };
+
+    struct DataObjectDetails {
+        std::string reference;
+        std::string name;
+        // Пока оставим пустым, можно добавить атрибуты в будущем
+    };
+
+    struct DataSetDetails {
+        std::string reference;
+        std::string name;
+        bool isDeletable;
+        bool isValid;
+        std::string errorReason;
+        bool alreadyCached;
+        int memberCount;
+        std::vector<std::pair<std::string, std::string>> members; // <reference, name>
+    };
+
+    struct ReportDetails {
+        std::string reference;
+        std::string name;
+        std::string reportType;
+        std::string datasetRef;
+        std::string originalDatasetRef;
+        bool enabled;
+        std::string reportId;
+        int trgOps;
+        int intgPd;
+        int bufTm;
+        bool gi;
+        bool isValid;
+        bool datasetAlreadyCached;
+        std::string errorReason;
+    };
+
+    // Результат обхода – объединение возможных типов
+    struct BrowseResult {
+        enum Type { ROOT_NODES, LOGICAL_NODE, DATA_OBJECT, DATA_SET, REPORT, ERROR };
+        Type type;
+        std::string errorReason;
+        std::vector<LogicalNodeInfo> rootNodes;
+        LogicalNodeDetails logicalNode;
+        DataObjectDetails dataObject;
+        DataSetDetails dataSet;
+        ReportDetails report;
+    };
+
+    // Получить список логических устройств и узлов (корневой обход)
+    static std::vector<LogicalNodeInfo> GetRootNodesWorker(IedConnection connection,
+                                                        std::recursive_mutex& mutex,
+                                                        MmsClient* client) {
+        std::vector<LogicalNodeInfo> result;
+        IedClientError error;
+
+        // Получаем список логических устройств
+        LinkedList deviceList = nullptr;
+        {
+            std::lock_guard<std::recursive_mutex> lock(mutex);
+            deviceList = IedConnection_getLogicalDeviceList(connection, &error);
+        }
+        if (error != IED_ERROR_OK || !deviceList) return result;
+
+        LinkedList device = deviceList;
+        while (device) {
+            char* ldName = (char*)device->data;
+            if (ldName) {
+                // Получаем список логических узлов устройства
+                LinkedList nodeList = nullptr;
+                {
+                    std::lock_guard<std::recursive_mutex> lock(mutex);
+                    nodeList = IedConnection_getLogicalDeviceDirectory(connection, &error, ldName);
+                }
+                if (error == IED_ERROR_OK && nodeList) {
+                    LinkedList node = nodeList;
+                    while (node) {
+                        char* lnName = (char*)node->data;
+                        if (lnName) {
+                            std::string lnRef = std::string(ldName) + "/" + lnName;
+                            LogicalNodeInfo lnInfo;
+                            lnInfo.name = lnName;
+                            lnInfo.reference = lnRef;
+
+                            // Получаем DataSets этого узла
+                            LinkedList dataSetList = nullptr;
+                            {
+                                std::lock_guard<std::recursive_mutex> lock(mutex);
+                                dataSetList = IedConnection_getLogicalNodeDirectory(connection, &error, lnRef.c_str(), ACSI_CLASS_DATA_SET);
+                            }
+                            if (error == IED_ERROR_OK && dataSetList) {
+                                LinkedList ds = dataSetList;
+                                while (ds) {
+                                    char* dsName = (char*)ds->data;
+                                    if (dsName) {
+                                        std::string dsRef = lnRef + "." + dsName;
+                                        DataSetInfo dsInfo;
+                                        dsInfo.name = dsName;
+                                        dsInfo.reference = dsRef;
+                                        dsInfo.type = "dataset";
+                                        lnInfo.dataSets.push_back(dsInfo);
+                                    }
+                                    ds = LinkedList_getNext(ds);
+                                }
+                                LinkedList_destroy(dataSetList);
+                            }
+
+                            // Получаем Reports этого узла
+                            LinkedList varList = nullptr;
+                            {
+                                std::lock_guard<std::recursive_mutex> lock(mutex);
+                                varList = IedConnection_getLogicalNodeVariables(connection, &error, lnRef.c_str());
+                            }
+                            if (error == IED_ERROR_OK && varList) {
+                                LinkedList var = varList;
+                                while (var) {
+                                    char* varName = (char*)var->data;
+                                    if (varName) {
+                                        std::string varStr(varName);
+                                        if ((varStr.find("RP$") == 0 || varStr.find("BR$") == 0) &&
+                                            std::count(varStr.begin(), varStr.end(), '$') == 1) {
+                                            ReportInfo rptInfo;
+                                            rptInfo.name = varName;
+                                            rptInfo.reference = lnRef + "." + varName;
+                                            rptInfo.type = (varStr.find("RP$") == 0) ? "RP" : "BR";
+                                            rptInfo.description = (rptInfo.type == "RP") ? "Unbuffered Report" : "Buffered Report";
+                                            lnInfo.reports.push_back(rptInfo);
+                                        }
+                                    }
+                                    var = LinkedList_getNext(var);
+                                }
+                                LinkedList_destroy(varList);
+                            }
+
+                            result.push_back(lnInfo);
+                        }
+                        node = LinkedList_getNext(node);
+                    }
+                    LinkedList_destroy(nodeList);
+                }
+            }
+            device = LinkedList_getNext(device);
+        }
+        LinkedList_destroy(deviceList);
+        return result;
+    }
+
+    // Получить детали логического узла
+    static LogicalNodeDetails GetLogicalNodeDetailsWorker(IedConnection connection,
+                                                        std::recursive_mutex& mutex,
+                                                        MmsClient* client,
+                                                        const std::string& lnRef) {
+        LogicalNodeDetails details;
+        details.reference = lnRef;
+        size_t slashPos = lnRef.find_last_of('/');
+        if (slashPos != std::string::npos)
+            details.name = lnRef.substr(slashPos + 1);
+        else
+            details.name = lnRef;
+
+        IedClientError error;
+
+        // DataObjects
+        LinkedList doList = nullptr;
+        {
+            std::lock_guard<std::recursive_mutex> lock(mutex);
+            doList = IedConnection_getLogicalNodeDirectory(connection, &error, lnRef.c_str(), ACSI_CLASS_DATA_OBJECT);
+        }
+        if (error == IED_ERROR_OK && doList) {
+            LinkedList doItem = doList;
+            while (doItem) {
+                char* doName = (char*)doItem->data;
+                if (doName) {
+                    std::string doNameStr(doName);
+                    // Пропускаем отчёты (они содержат $)
+                    if (doNameStr.find("RP$") == 0 || doNameStr.find("BR$") == 0) {
+                        doItem = LinkedList_getNext(doItem);
+                        continue;
+                    }
+                    DataObjectInfo doi;
+                    doi.name = doName;
+                    doi.reference = lnRef + "." + doName;
+
+                    // Определяем CDC по имени
+                    std::string lower = doNameStr;
+                    std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+                    if (lower.find("pos") != std::string::npos || lower.find("swi") != std::string::npos)
+                        doi.cdc = "DPC";
+                    else if (lower.find("ind") != std::string::npos || lower.find("alm") != std::string::npos || lower.find("tr") != std::string::npos)
+                        doi.cdc = "SPS";
+                    else if (lower.find("anin") != std::string::npos || lower.find("mag") != std::string::npos)
+                        doi.cdc = "MV";
+                    else if (lower.find("mod") != std::string::npos)
+                        doi.cdc = "INC";
+                    else if (lower.find("beh") != std::string::npos)
+                        doi.cdc = "INS";
+                    else if (lower.find("max") != std::string::npos || lower.find("set") != std::string::npos)
+                        doi.cdc = "ASG";
+                    else if (lower.find("phy") != std::string::npos || lower.find("nam") != std::string::npos)
+                        doi.cdc = "LPL";
+                    else if (lower.find("str") != std::string::npos)
+                        doi.cdc = "DPL";
+                    else
+                        doi.cdc = "Unknown";
+
+                    details.dataObjects.push_back(doi);
+                }
+                doItem = LinkedList_getNext(doItem);
+            }
+            LinkedList_destroy(doList);
+        }
+
+        // DataSets
+        LinkedList dsList = nullptr;
+        {
+            std::lock_guard<std::recursive_mutex> lock(mutex);
+            dsList = IedConnection_getLogicalNodeDirectory(connection, &error, lnRef.c_str(), ACSI_CLASS_DATA_SET);
+        }
+        if (error == IED_ERROR_OK && dsList) {
+            LinkedList dsItem = dsList;
+            while (dsItem) {
+                char* dsName = (char*)dsItem->data;
+                if (dsName) {
+                    DataSetInfo dsi;
+                    dsi.name = dsName;
+                    dsi.reference = lnRef + "." + dsName;
+                    dsi.type = "dataset";
+                    details.dataSets.push_back(dsi);
+                }
+                dsItem = LinkedList_getNext(dsItem);
+            }
+            LinkedList_destroy(dsList);
+        }
+
+        details.dataObjectsCount = details.dataObjects.size();
+        details.dataSetsCount = details.dataSets.size();
+        return details;
+    }
+
+    // Получить детали DataSet
+    static DataSetDetails GetDataSetDetailsWorker(IedConnection connection,
+                                                std::recursive_mutex& mutex,
+                                                MmsClient* client,
+                                                const std::string& dsRef) {
+        DataSetDetails details;
+        details.reference = dsRef;
+        size_t dotPos = dsRef.find_last_of('.');
+        if (dotPos != std::string::npos)
+            details.name = dsRef.substr(dotPos + 1);
+        else
+            details.name = dsRef;
+
+        details.isValid = true;
+
+        // Проверяем, закэширован ли уже DataSet
+        {
+            std::lock_guard<std::recursive_mutex> lock(mutex);
+            auto it = client->GetDataSetCache().find(dsRef);
+            if (it != client->GetDataSetCache().end()) {
+                details.alreadyCached = true;
+                details.isDeletable = false; // не известно из кэша
+                details.memberCount = it->second.memberRefs.size();
+                for (const auto& memberRef : it->second.memberRefs) {
+                    std::string memberName = memberRef;
+                    size_t lastDot = memberRef.rfind('.');
+                    if (lastDot != std::string::npos)
+                        memberName = memberRef.substr(lastDot + 1);
+                    details.members.emplace_back(memberRef, memberName);
+                }
+                return details;
+            }
+        }
+
+        details.alreadyCached = false;
+        IedClientError error;
+        bool isDeletable = false;
+        LinkedList members = nullptr;
+        {
+            std::lock_guard<std::recursive_mutex> lock(mutex);
+            members = IedConnection_getDataSetDirectory(connection, &error, dsRef.c_str(), &isDeletable);
+        }
+        if (error != IED_ERROR_OK || !members) {
+            details.isValid = false;
+            details.errorReason = "Cannot get dataset directory, error: " + std::to_string(error);
+            return details;
+        }
+
+        details.isDeletable = isDeletable;
+        std::vector<std::string> memberRefs;
+        LinkedList entry = members;
+        while (entry) {
+            if (entry->data) {
+                char* memberRef = (char*)entry->data;
+                memberRefs.push_back(std::string(memberRef));
+                std::string memberName = std::string(memberRef);
+                size_t lastDot = memberRefs.back().rfind('.');
+                if (lastDot != std::string::npos)
+                    memberName = memberRefs.back().substr(lastDot + 1);
+                details.members.emplace_back(std::string(memberRef), memberName);
+            }
+            entry = LinkedList_getNext(entry);
+        }
+        LinkedList_destroy(members);
+        details.memberCount = memberRefs.size();
+
+        // Кэшируем структуры для этого DataSet
+        {
+            std::lock_guard<std::recursive_mutex> lock(mutex);
+            client->CacheDataSetStructure(dsRef, memberRefs);
+        }
+
+        return details;
+    }
+
+    // Получить детали отчета
+    static ReportDetails GetReportDetailsWorker(IedConnection connection,
+                                                std::recursive_mutex& mutex,
+                                                MmsClient* client,
+                                                const std::string& rRef) {
+        ReportDetails details;
+        details.reference = rRef;
+        size_t dotPos = rRef.find_last_of('.');
+        if (dotPos != std::string::npos)
+            details.name = rRef.substr(dotPos + 1);
+        else
+            details.name = rRef;
+
+        // Тип отчета
+        if (rRef.find("RP$") != std::string::npos)
+            details.reportType = "RP";
+        else if (rRef.find("BR$") != std::string::npos)
+            details.reportType = "BR";
+        else {
+            details.isValid = false;
+            details.errorReason = "Unknown report type";
+            return details;
+        }
+
+        IedClientError error;
+        ClientReportControlBlock rcb = nullptr;
+        {
+            std::lock_guard<std::recursive_mutex> lock(mutex);
+            rcb = IedConnection_getRCBValues(connection, &error, rRef.c_str(), nullptr);
+        }
+        if (error != IED_ERROR_OK || !rcb) {
+            details.isValid = false;
+            details.errorReason = "Cannot get RCB values, error: " + std::to_string(error);
+            return details;
+        }
+
+        // Получаем связанный DataSet
+        const char* datasetRefRaw = ClientReportControlBlock_getDataSetReference(rcb);
+        if (datasetRefRaw) {
+            details.datasetRef = datasetRefRaw;
+            details.originalDatasetRef = datasetRefRaw;
+            // Нормализуем имя (заменяем $ на .)
+            std::string normalized = details.datasetRef;
+            std::replace(normalized.begin(), normalized.end(), '$', '.');
+            details.datasetRef = normalized;
+
+            // Проверяем, закэширован ли DataSet
+            bool cached = false;
+            {
+                std::lock_guard<std::recursive_mutex> lock(mutex);
+                cached = client->GetDataSetCache().find(normalized) != client->GetDataSetCache().end();
+            }
+            details.datasetAlreadyCached = cached;
+            if (!cached) {
+                // Пытаемся получить члены DataSet для кэширования
+                bool isDeletable = false;
+                LinkedList members = nullptr;
+                {
+                    std::lock_guard<std::recursive_mutex> lock(mutex);
+                    members = IedConnection_getDataSetDirectory(connection, &error, normalized.c_str(), &isDeletable);
+                }
+                if (error == IED_ERROR_OK && members) {
+                    std::vector<std::string> memberRefs;
+                    LinkedList entry = members;
+                    while (entry) {
+                        if (entry->data)
+                            memberRefs.push_back((char*)entry->data);
+                        entry = LinkedList_getNext(entry);
+                    }
+                    LinkedList_destroy(members);
+                    {
+                        std::lock_guard<std::recursive_mutex> lock(mutex);
+                        client->CacheDataSetStructure(normalized, memberRefs);
+                    }
+                }
+            }
+        }
+
+        details.enabled = ClientReportControlBlock_getRptEna(rcb);
+        const char* rptId = ClientReportControlBlock_getRptId(rcb);
+        if (rptId)
+            details.reportId = rptId;
+        details.trgOps = ClientReportControlBlock_getTrgOps(rcb);
+        details.intgPd = ClientReportControlBlock_getIntgPd(rcb);
+        details.bufTm = ClientReportControlBlock_getBufTm(rcb);
+        details.gi = ClientReportControlBlock_getGI(rcb);
+
+        ClientReportControlBlock_destroy(rcb);
+        details.isValid = true;
+        return details;
+    }
+
+    class BrowseDataModelWorker : public Napi::AsyncWorker {
+    public:
+        BrowseDataModelWorker(MmsClient* client,
+                            IedConnection connection,
+                            std::recursive_mutex& connMutex,
+                            Napi::Env env,
+                            const std::string& ref,
+                            Napi::Promise::Deferred deferred)
+            : Napi::AsyncWorker(env),
+            client_(client),
+            connection_(connection),
+            connMutex_(connMutex),
+            env_(env),
+            ref_(ref),
+            deferred_(deferred) {}
+
+        ~BrowseDataModelWorker() {}
+
+        void Execute() override {
+            if (ref_.empty()) {
+                // Корневой обход
+                result_.type = BrowseResult::ROOT_NODES;
+                result_.rootNodes = GetRootNodesWorker(connection_, connMutex_, client_);
+            } else {
+                // Определяем тип по ссылке
+                size_t dotPos = ref_.find('.');
+                if (dotPos == std::string::npos) {
+                    // Это логический узел
+                    result_.type = BrowseResult::LOGICAL_NODE;
+                    result_.logicalNode = GetLogicalNodeDetailsWorker(connection_, connMutex_, client_, ref_);
+                } else {
+                    // Есть точка – может быть DO, DS или Report
+                    std::string objectPart = ref_.substr(dotPos + 1);
+                    // Проверяем, является ли DataSet
+                    IedClientError error;
+                    bool isDeletable = false;
+                    LinkedList members = nullptr;
+                    {
+                        std::lock_guard<std::recursive_mutex> lock(connMutex_);
+                        members = IedConnection_getDataSetDirectory(connection_, &error, ref_.c_str(), &isDeletable);
+                    }
+                    if (error == IED_ERROR_OK && members) {
+                        LinkedList_destroy(members);
+                        result_.type = BrowseResult::DATA_SET;
+                        result_.dataSet = GetDataSetDetailsWorker(connection_, connMutex_, client_, ref_);
+                    } else if (objectPart.find('$') != std::string::npos) {
+                        // Содержит $ – это Report
+                        result_.type = BrowseResult::REPORT;
+                        result_.report = GetReportDetailsWorker(connection_, connMutex_, client_, ref_);
+                    } else {
+                        // Иначе DataObject
+                        result_.type = BrowseResult::DATA_OBJECT;
+                        // Пока просто сохраняем ссылку и имя
+                        result_.dataObject.reference = ref_;
+                        size_t lastDot = ref_.rfind('.');
+                        if (lastDot != std::string::npos)
+                            result_.dataObject.name = ref_.substr(lastDot + 1);
+                        else
+                            result_.dataObject.name = ref_;
+                        // TODO: при необходимости можно добавить получение атрибутов
+                    }
+                }
+            }
+        }
+
+        void OnOK() override {
+            Napi::Env env = env_;
+            Napi::Object resultObj = Napi::Object::New(env);
+
+            switch (result_.type) {
+                case BrowseResult::ROOT_NODES: {
+                    Napi::Array arr = Napi::Array::New(env, result_.rootNodes.size());
+                    for (size_t i = 0; i < result_.rootNodes.size(); ++i) {
+                        const auto& ln = result_.rootNodes[i];
+                        Napi::Object obj = Napi::Object::New(env);
+                        obj.Set("name", Napi::String::New(env, ln.name));
+                        obj.Set("reference", Napi::String::New(env, ln.reference));
+
+                        // DataSets
+                        Napi::Array dsArr = Napi::Array::New(env, ln.dataSets.size());
+                        for (size_t j = 0; j < ln.dataSets.size(); ++j) {
+                            Napi::Object dsObj = Napi::Object::New(env);
+                            dsObj.Set("name", Napi::String::New(env, ln.dataSets[j].name));
+                            dsObj.Set("reference", Napi::String::New(env, ln.dataSets[j].reference));
+                            dsObj.Set("type", Napi::String::New(env, ln.dataSets[j].type));
+                            dsArr.Set(j, dsObj);
+                        }
+                        obj.Set("dataSets", dsArr);
+
+                        // Reports
+                        Napi::Array rptArr = Napi::Array::New(env, ln.reports.size());
+                        for (size_t j = 0; j < ln.reports.size(); ++j) {
+                            Napi::Object rptObj = Napi::Object::New(env);
+                            rptObj.Set("name", Napi::String::New(env, ln.reports[j].name));
+                            rptObj.Set("reference", Napi::String::New(env, ln.reports[j].reference));
+                            rptObj.Set("type", Napi::String::New(env, ln.reports[j].type));
+                            rptObj.Set("description", Napi::String::New(env, ln.reports[j].description));
+                            rptArr.Set(j, rptObj);
+                        }
+                        obj.Set("reports", rptArr);
+
+                        arr.Set(i, obj);
+                    }
+                    deferred_.Resolve(arr);
+                    break;
+                }
+
+                case BrowseResult::LOGICAL_NODE: {
+                    const auto& ln = result_.logicalNode;
+                    Napi::Object obj = Napi::Object::New(env);
+                    obj.Set("type", Napi::String::New(env, "logicalNode"));
+                    obj.Set("reference", Napi::String::New(env, ln.reference));
+                    obj.Set("name", Napi::String::New(env, ln.name));
+
+                    // DataObjects
+                    Napi::Array doArr = Napi::Array::New(env, ln.dataObjects.size());
+                    for (size_t i = 0; i < ln.dataObjects.size(); ++i) {
+                        Napi::Object doObj = Napi::Object::New(env);
+                        doObj.Set("name", Napi::String::New(env, ln.dataObjects[i].name));
+                        doObj.Set("reference", Napi::String::New(env, ln.dataObjects[i].reference));
+                        doObj.Set("type", Napi::String::New(env, "dataObject"));
+                        doObj.Set("cdc", Napi::String::New(env, ln.dataObjects[i].cdc));
+                        doArr.Set(i, doObj);
+                    }
+                    obj.Set("dataObjects", doArr);
+                    obj.Set("dataObjectsCount", Napi::Number::New(env, ln.dataObjectsCount));
+
+                    // DataSets
+                    Napi::Array dsArr = Napi::Array::New(env, ln.dataSets.size());
+                    for (size_t i = 0; i < ln.dataSets.size(); ++i) {
+                        Napi::Object dsObj = Napi::Object::New(env);
+                        dsObj.Set("name", Napi::String::New(env, ln.dataSets[i].name));
+                        dsObj.Set("reference", Napi::String::New(env, ln.dataSets[i].reference));
+                        dsObj.Set("type", Napi::String::New(env, ln.dataSets[i].type));
+                        dsArr.Set(i, dsObj);
+                    }
+                    obj.Set("dataSets", dsArr);
+                    obj.Set("dataSetsCount", Napi::Number::New(env, ln.dataSetsCount));
+
+                    deferred_.Resolve(obj);
+                    break;
+                }
+
+                case BrowseResult::DATA_OBJECT: {
+                    const auto& dobj = result_.dataObject;
+                    Napi::Object obj = Napi::Object::New(env);
+                    obj.Set("type", Napi::String::New(env, "dataObject"));
+                    obj.Set("reference", Napi::String::New(env, dobj.reference));
+                    obj.Set("name", Napi::String::New(env, dobj.name));
+                    // Пока без атрибутов
+                    deferred_.Resolve(obj);
+                    break;
+                }
+
+                case BrowseResult::DATA_SET: {
+                    const auto& ds = result_.dataSet;
+                    Napi::Object obj = Napi::Object::New(env);
+                    obj.Set("type", Napi::String::New(env, "dataset"));
+                    obj.Set("reference", Napi::String::New(env, ds.reference));
+                    obj.Set("name", Napi::String::New(env, ds.name));
+                    if (!ds.isValid) {
+                        obj.Set("isValid", Napi::Boolean::New(env, false));
+                        obj.Set("errorReason", Napi::String::New(env, ds.errorReason));
+                    } else {
+                        obj.Set("isValid", Napi::Boolean::New(env, true));
+                        obj.Set("isDeletable", Napi::Boolean::New(env, ds.isDeletable));
+                        obj.Set("alreadyCached", Napi::Boolean::New(env, ds.alreadyCached));
+                        obj.Set("memberCount", Napi::Number::New(env, ds.memberCount));
+
+                        Napi::Array membersArr = Napi::Array::New(env, ds.members.size());
+                        for (size_t i = 0; i < ds.members.size(); ++i) {
+                            Napi::Object memObj = Napi::Object::New(env);
+                            memObj.Set("reference", Napi::String::New(env, ds.members[i].first));
+                            memObj.Set("name", Napi::String::New(env, ds.members[i].second));
+                            membersArr.Set(i, memObj);
+                        }
+                        obj.Set("members", membersArr);
+                    }
+                    deferred_.Resolve(obj);
+                    break;
+                }
+
+                case BrowseResult::REPORT: {
+                    const auto& rpt = result_.report;
+                    Napi::Object obj = Napi::Object::New(env);
+                    obj.Set("type", Napi::String::New(env, "report"));
+                    obj.Set("reference", Napi::String::New(env, rpt.reference));
+                    obj.Set("name", Napi::String::New(env, rpt.name));
+                    if (!rpt.isValid) {
+                        obj.Set("isValid", Napi::Boolean::New(env, false));
+                        obj.Set("errorReason", Napi::String::New(env, rpt.errorReason));
+                    } else {
+                        obj.Set("isValid", Napi::Boolean::New(env, true));
+                        obj.Set("reportType", Napi::String::New(env, rpt.reportType));
+                        obj.Set("datasetRef", Napi::String::New(env, rpt.datasetRef));
+                        obj.Set("originalDatasetRef", Napi::String::New(env, rpt.originalDatasetRef));
+                        obj.Set("enabled", Napi::Boolean::New(env, rpt.enabled));
+                        obj.Set("reportId", Napi::String::New(env, rpt.reportId));
+                        obj.Set("trgOps", Napi::Number::New(env, rpt.trgOps));
+                        obj.Set("intgPd", Napi::Number::New(env, rpt.intgPd));
+                        obj.Set("bufTm", Napi::Number::New(env, rpt.bufTm));
+                        obj.Set("gi", Napi::Boolean::New(env, rpt.gi));
+                        obj.Set("datasetAlreadyCached", Napi::Boolean::New(env, rpt.datasetAlreadyCached));
+                    }
+                    deferred_.Resolve(obj);
+                    break;
+                }
+
+                case BrowseResult::ERROR:
+                    deferred_.Reject(Napi::Error::New(env, result_.errorReason).Value());
+                    break;
+            }
+        }
+
+        void OnError(const Napi::Error& e) override {
+            deferred_.Reject(e.Value());
+        }
+
+    private:
+        MmsClient* client_;
+        IedConnection connection_;
+        std::recursive_mutex& connMutex_;
+        Napi::Env env_;
+        std::string ref_;
+        Napi::Promise::Deferred deferred_;
+        BrowseResult result_;
+    };
+
     // Структура для хранения результатов асинхронного чтения
     struct DataSetReadResult {
         std::string datasetRef;
@@ -388,6 +1063,191 @@ namespace {
         std::vector<std::string> datasetRefs_;
         Napi::Promise::Deferred deferred_;
         std::vector<DataSetPollResult> results_;
+    };
+
+     // Результат быстрого чтения одного DataRef (poll)
+    struct ReadDataResult {
+        std::string dataRef;
+        bool isValid;
+        std::string errorReason;
+        MmsClient::ResultData value;
+        FunctionalConstraint usedFc;   // какой FC был успешно использован
+    };
+
+    class ReadDataWorker : public Napi::AsyncWorker {
+    public:
+        ReadDataWorker(MmsClient* client,
+                    IedConnection connection,
+                    std::recursive_mutex& connMutex,
+                    Napi::Env env,
+                    const std::vector<std::string>& dataRefs,
+                    Napi::Promise::Deferred deferred)
+            : Napi::AsyncWorker(env),
+            client_(client),
+            connection_(connection),
+            connMutex_(connMutex),
+            env_(env),
+            dataRefs_(dataRefs),
+            deferred_(deferred) {}
+
+        ~ReadDataWorker() {}
+
+        void Execute() override {
+            for (const auto& ref : dataRefs_) {
+                ReadDataResult res;
+                res.dataRef = ref;
+                res.isValid = false;
+
+                // --- Шаг 1: Предварительная обработка ссылки (под мьютексом) ---
+                std::string actualRef;
+                FunctionalConstraint requestedFc = IEC61850_FC_ST;
+                {
+                    std::lock_guard<std::recursive_mutex> lock(connMutex_);
+                    // Извлекаем FC из ссылки, если есть
+                    size_t bracketPos = ref.find('[');
+                    if (bracketPos != std::string::npos && ref.back() == ']') {
+                        std::string fcStr = ref.substr(bracketPos + 1, ref.length() - bracketPos - 2);
+                        requestedFc = ParseFCFromString(fcStr);
+                        actualRef = ref.substr(0, bracketPos);
+                    } else {
+                        actualRef = ref;
+                    }
+                }
+
+                // --- Шаг 2: Чтение значения (БЕЗ мьютекса) ---
+                IedClientError error;
+                MmsValue* value = nullptr;
+                FunctionalConstraint usedFc = requestedFc;
+                std::vector<FunctionalConstraint> fallbackFcs = {
+                    IEC61850_FC_ST, IEC61850_FC_MX, IEC61850_FC_CO,
+                    IEC61850_FC_CF, IEC61850_FC_DC, IEC61850_FC_SP,
+                    IEC61850_FC_SG, IEC61850_FC_ALL
+                };
+
+                // Пробуем сначала запрошенный FC, затем остальные
+                value = IedConnection_readObject(connection_, &error, actualRef.c_str(), requestedFc);
+                if (error != IED_ERROR_OK || !value) {
+                    for (auto tryFc : fallbackFcs) {
+                        if (tryFc == requestedFc) continue;
+                        if (value) {
+                            MmsValue_delete(value);
+                            value = nullptr;
+                        }
+                        value = IedConnection_readObject(connection_, &error, actualRef.c_str(), tryFc);
+                        if (error == IED_ERROR_OK && value) {
+                            usedFc = tryFc;
+                            break;
+                        }
+                    }
+                }
+
+                if (error != IED_ERROR_OK || !value) {
+                    res.errorReason = "Read failed for " + ref + ", error: " + std::to_string(error);
+                    results_.push_back(res);
+                    continue;
+                }
+
+                // Проверяем, не является ли значение ошибкой доступа
+                if (MmsValue_getType(value) == MMS_DATA_ACCESS_ERROR) {
+                    res.isValid = false;
+                    res.errorReason = "Data access error for " + ref;
+                    MmsValue_delete(value);
+                    results_.push_back(res);
+                    continue;
+                }
+
+                // --- Шаг 3: Конвертация значения в ResultData (без мьютекса) ---
+                std::string attrName = actualRef;
+                size_t lastDot = actualRef.rfind('.');
+                if (lastDot != std::string::npos) attrName = actualRef.substr(lastDot + 1);
+                
+                // Формируем полную ссылку с FC для кэширования
+                std::string fullRefWithFc = actualRef + "[" + std::to_string(usedFc) + "]";
+                
+                // Конвертируем значение во временную структуру с числовыми индексами
+                MmsClient::ResultData rd = ConvertMmsValueForReportFast(value, attrName, 0);
+
+                // --- Шаг 4: Работа с кэшем под мьютексом ---
+                {
+                    std::lock_guard<std::recursive_mutex> lock(connMutex_);
+
+                    // Если это структура, проверяем наличие кэша и при необходимости заполняем
+                    if (rd.type == MMS_STRUCTURE) {
+                        std::vector<std::string> elementNames;
+                        bool hasCache = client_->GetCachedElementNames(actualRef, usedFc, elementNames);
+
+                        if (!hasCache) {
+                            // Кэш отсутствует – запрашиваем спецификацию с сервера и заполняем кэш
+                            printf("  [ReadDataWorker] Cache miss for %s, requesting structure info...\n", 
+                                fullRefWithFc.c_str());
+                            
+                            // RecursiveCacheStructureElements заполнит кэш для этой структуры и всех вложенных
+                            RecursiveCacheStructureElements(connection_, client_, actualRef, usedFc, 0);
+                            
+                            printf("  [ReadDataWorker] Cache populated for %s\n", fullRefWithFc.c_str());
+                        }
+
+                        // Теперь применяем кэшированные имена к структуре
+                        // EnhanceResultDataWithCachedNames использует client_->GetCachedElementNames внутри
+                        EnhanceResultDataWithCachedNames(client_, rd, fullRefWithFc, 0);
+                        
+                        // Для отладки выведем полученные имена
+                        if (!rd.structureElementNames.empty()) {
+                            printf("  [ReadDataWorker] Structure %s has %zu elements with names:\n", 
+                                fullRefWithFc.c_str(), rd.structureElementNames.size());
+                            for (size_t i = 0; i < rd.structureElementNames.size() && i < 3; ++i) {
+                                printf("    [%zu] %s\n", i, rd.structureElementNames[i].c_str());
+                            }
+                        }
+                    }
+                }
+
+                res.isValid = true;
+                res.value = std::move(rd);
+                res.usedFc = usedFc;
+
+                MmsValue_delete(value);
+                results_.push_back(res);
+            }
+        }
+
+        void OnOK() override {
+            Napi::Env env = env_;
+            Napi::Array resultArray = Napi::Array::New(env, results_.size());
+
+            for (size_t idx = 0; idx < results_.size(); ++idx) {
+                ReadDataResult& res = results_[idx];
+                Napi::Object item = Napi::Object::New(env);
+                item.Set("dataRef", Napi::String::New(env, res.dataRef));
+                item.Set("isValid", Napi::Boolean::New(env, res.isValid));
+
+                if (!res.isValid) {
+                    item.Set("errorReason", Napi::String::New(env, res.errorReason));
+                    item.Set("value", Napi::String::New(env, res.errorReason)); // для совместимости
+                } else {
+                    Napi::Value jsValue = ResultDataToNapiWithNames(env, res.value, res.dataRef);
+                    item.Set("value", jsValue);
+                    // можно также добавить usedFc при необходимости
+                }
+
+                resultArray.Set(static_cast<uint32_t>(idx), item);
+            }
+
+            deferred_.Resolve(resultArray);
+        }
+
+        void OnError(const Napi::Error& e) override {
+            deferred_.Reject(e.Value());
+        }
+
+    private:
+        MmsClient* client_;
+        IedConnection connection_;
+        std::recursive_mutex& connMutex_;
+        Napi::Env env_;
+        std::vector<std::string> dataRefs_;
+        Napi::Promise::Deferred deferred_;
+        std::vector<ReadDataResult> results_;
     };
 } // анонимный namespace
 
@@ -2519,685 +3379,6 @@ Napi::Value MmsClient::PollDataSetValues(const Napi::CallbackInfo& info) {
     return deferred.Promise();
 }
 
-// Функция для получения корневых узлов
-Napi::Value MmsClient::GetRootNodes(Napi::Env env) {
-    IedClientError error;
-    
-    // Получаем список Logical Devices
-    LinkedList deviceList = IedConnection_getLogicalDeviceList(connection_, &error);
-    if (error != IED_ERROR_OK || !deviceList) {
-        printf("GetRootNodes: Failed to get logical device list, error: %d\n", error);
-        return Napi::Array::New(env, 0);
-    }
-    
-    Napi::Array resultArray = Napi::Array::New(env);
-    uint32_t deviceIndex = 0;
-    
-    LinkedList device = LinkedList_getNext(deviceList);
-    while (device) {
-        char* ldName = (char*)device->data;
-        if (!ldName) { 
-            device = LinkedList_getNext(device); 
-            continue; 
-        }
-        
-        printf("Processing logical device: %s\n", ldName);
-        
-        // Получаем список Logical Nodes для устройства
-        LinkedList logicalNodes = IedConnection_getLogicalDeviceDirectory(connection_, &error, ldName);
-        if (error == IED_ERROR_OK && logicalNodes) {
-            LinkedList ln = LinkedList_getNext(logicalNodes);
-            while (ln) {
-                char* lnName = (char*)ln->data;
-                if (!lnName) { 
-                    ln = LinkedList_getNext(ln); 
-                    continue; 
-                }
-                
-                std::string lnRef = std::string(ldName) + "/" + lnName;
-                printf("  Found logical node: %s\n", lnRef.c_str());
-                
-                Napi::Object lnObj = Napi::Object::New(env);
-                lnObj.Set("name", Napi::String::New(env, lnName));
-                lnObj.Set("reference", Napi::String::New(env, lnRef));
-                
-                // Получаем DataSets для этого LN
-                Napi::Array dsArray = Napi::Array::New(env);
-                uint32_t dsIndex = 0;
-                
-                LinkedList dataSets = IedConnection_getLogicalNodeDirectory(
-                    connection_, &error, lnRef.c_str(), ACSI_CLASS_DATA_SET);
-                
-                if (error == IED_ERROR_OK && dataSets) {
-                    LinkedList ds = LinkedList_getNext(dataSets);
-                    while (ds) {
-                        char* dsName = (char*)ds->data;
-                        if (!dsName) { 
-                            ds = LinkedList_getNext(ds); 
-                            continue; 
-                        }
-                        
-                        std::string dsRef = lnRef + "." + dsName;
-                        Napi::Object dsObj = Napi::Object::New(env);
-                        dsObj.Set("name", Napi::String::New(env, dsName));
-                        dsObj.Set("reference", Napi::String::New(env, dsRef));
-                        dsObj.Set("type", Napi::String::New(env, "dataset"));
-                        
-                        dsArray.Set(dsIndex++, dsObj);
-                        ds = LinkedList_getNext(ds);
-                    }
-                    LinkedList_destroy(dataSets);
-                }
-                
-                lnObj.Set("dataSets", dsArray);
-                
-                // Получаем Reports для этого LN
-                Napi::Array reportsArray = Napi::Array::New(env);
-                uint32_t reportIndex = 0;
-                
-                // Используем getLogicalNodeVariables для получения всех объектов
-                LinkedList dataObjects = IedConnection_getLogicalNodeVariables(connection_, &error, lnRef.c_str());
-                
-                if (error == IED_ERROR_OK && dataObjects) {
-                    LinkedList dObj = LinkedList_getNext(dataObjects);
-                    while (dObj) {
-                        char* doName = (char*)dObj->data;
-                        if (!doName) { 
-                            dObj = LinkedList_getNext(dObj); 
-                            continue; 
-                        }
-                        
-                        std::string doNameStr(doName);
-                        
-                        // Проверяем, является ли этот объект отчетом
-                        bool isReport = false;
-                        std::string reportType = "";
-                        
-                        if (doNameStr.find("RP$") == 0 || doNameStr.find("BR$") == 0) {
-                            // Считаем количество знаков $
-                            size_t dollarCount = 0;
-                            for (char c : doNameStr) {
-                                if (c == '$') dollarCount++;
-                            }
-                            
-                            // Если ровно один $, то это основной объект отчета
-                            if (dollarCount == 1) {
-                                isReport = true;
-                                if (doNameStr.find("RP$") == 0) {
-                                    reportType = "RP";
-                                } else if (doNameStr.find("BR$") == 0) {
-                                    reportType = "BR";
-                                }
-                            }
-                        }
-                        
-                        if (isReport) {
-                            std::string doRef = lnRef + "." + doName;
-                            
-                            Napi::Object reportObj = Napi::Object::New(env);
-                            reportObj.Set("name", Napi::String::New(env, doName));
-                            reportObj.Set("reference", Napi::String::New(env, doRef));
-                            reportObj.Set("type", Napi::String::New(env, reportType));
-                            reportObj.Set("description", Napi::String::New(env, 
-                                (reportType == "RP") ? "Unbuffered Report" : "Buffered Report"));
-                            
-                            reportsArray.Set(reportIndex++, reportObj);
-                        }
-                        
-                        dObj = LinkedList_getNext(dObj);
-                    }
-                    LinkedList_destroy(dataObjects);
-                }
-                
-                lnObj.Set("reports", reportsArray);
-                resultArray.Set(deviceIndex++, lnObj);
-                ln = LinkedList_getNext(ln);
-            }
-            LinkedList_destroy(logicalNodes);
-        }
-        
-        device = LinkedList_getNext(device);
-    }
-    LinkedList_destroy(deviceList);
-    
-    return resultArray;
-}
-
-// Функция для обхода конкретного объекта
-Napi::Value MmsClient::BrowseSpecificObject(Napi::Env env, const std::string& ref) {
-    printf("BrowseSpecificObject: %s\n", ref.c_str());
-    
-    // Проверяем, что это за тип объекта
-    // 1. LN: формат "LD/LN" (например, "WAGO61850ServerDevice/LLN0")
-    // 2. DO: формат "LD/LN.DO" (например, "WAGO61850ServerDevice/LLN0.Beh")
-    // 3. DS: формат "LD/LN.DS" (например, "WAGO61850ServerDevice/LLN0.DataSet01")
-    // 4. R: формат "LD/LN.R" (например, "WAGO61850ServerDevice/LLN0.RP$ReportBlock0101")
-    
-    // Проверяем, содержит ли ссылка точку
-    size_t dotPos = ref.find('.');
-    
-    if (dotPos == std::string::npos) {
-        // Нет точки - это должен быть LN
-        return GetLogicalNodeDetails(env, ref);
-    } else {
-        // Есть точка - это может быть DO, DS или R
-        // Извлекаем часть до точки
-        std::string basePart = ref.substr(0, dotPos);
-        std::string objectPart = ref.substr(dotPos + 1);
-        
-        // Проверяем, является ли это DataSet
-        IedClientError error;
-        bool isDeletable = false;
-        
-        LinkedList dataSetMembers = IedConnection_getDataSetDirectory(
-            connection_, &error, ref.c_str(), &isDeletable);
-        
-        if (error == IED_ERROR_OK && dataSetMembers) {
-            // Это DataSet
-            LinkedList_destroy(dataSetMembers);
-            return GetDataSetDetails(env, ref);
-        }
-        
-        // Проверяем, является ли это отчетом (содержит $)
-        if (objectPart.find('$') != std::string::npos) {
-            // Содержит $ - вероятно, это отчет
-            return GetReportDetails(env, ref);
-        } else {
-            // Скорее всего, это DataObject
-            return GetDataObjectDetails(env, ref);
-        }
-    }
-}
-
-// Функция для получения деталей Logical Node
-Napi::Value MmsClient::GetLogicalNodeDetails(Napi::Env env, const std::string& lnRef) {
-    printf("GetLogicalNodeDetails: %s\n", lnRef.c_str());
-    
-    IedClientError error;
-    Napi::Object result = Napi::Object::New(env);
-    result.Set("type", Napi::String::New(env, "logicalNode"));
-    result.Set("reference", Napi::String::New(env, lnRef));
-    
-    // Извлекаем имя LN из ссылки
-    size_t slashPos = lnRef.find_last_of('/');
-    if (slashPos != std::string::npos) {
-        std::string lnName = lnRef.substr(slashPos + 1);
-        result.Set("name", Napi::String::New(env, lnName));
-    }
-    
-    // ВАЖНОЕ ИСПРАВЛЕНИЕ: Используем getLogicalNodeDirectory с классом DATA_OBJECT
-    // чтобы получить только DataObjects, а не все переменные
-    Napi::Array doArray = Napi::Array::New(env);
-    uint32_t doIndex = 0;
-    
-    LinkedList dataObjects = IedConnection_getLogicalNodeDirectory(
-        connection_, &error, lnRef.c_str(), ACSI_CLASS_DATA_OBJECT);
-    
-    if (error == IED_ERROR_OK && dataObjects) {
-        printf("  Found DataObjects for %s:\n", lnRef.c_str());
-        LinkedList dObj = LinkedList_getNext(dataObjects);
-        while (dObj) {
-            char* doName = (char*)dObj->data;
-            if (!doName) { 
-                dObj = LinkedList_getNext(dObj); 
-                continue; 
-            }
-            
-            std::string doRef = lnRef + "." + doName;
-            printf("    DataObject: %s\n", doName);
-            
-            // Проверяем, не является ли это отчетом (пропускаем отчеты)
-            std::string doNameStr(doName);
-            if (doNameStr.find("RP$") == 0 || doNameStr.find("BR$") == 0) {
-                // Это отчет, пропускаем - отчеты обрабатываем отдельно
-                dObj = LinkedList_getNext(dObj);
-                continue;
-            }
-            
-            // Это обычный DataObject
-            Napi::Object doObj = Napi::Object::New(env);
-            doObj.Set("name", Napi::String::New(env, doName));
-            doObj.Set("reference", Napi::String::New(env, doRef));
-            doObj.Set("type", Napi::String::New(env, "dataObject"));
-            
-            // Определяем тип CDC по имени
-            std::string doStr(doName);
-            std::transform(doStr.begin(), doStr.end(), doStr.begin(), ::tolower);
-            
-            if (doStr.find("pos") != std::string::npos ||
-                doStr.find("swi") != std::string::npos) {
-                doObj.Set("cdc", Napi::String::New(env, "DPC"));
-            } else if (doStr.find("ind") != std::string::npos ||
-                       doStr.find("alm") != std::string::npos ||
-                       doStr.find("tr") != std::string::npos) {
-                doObj.Set("cdc", Napi::String::New(env, "SPS"));
-            } else if (doStr.find("anin") != std::string::npos ||
-                       doStr.find("mag") != std::string::npos) {
-                doObj.Set("cdc", Napi::String::New(env, "MV"));
-            } else if (doStr.find("mod") != std::string::npos) {
-                doObj.Set("cdc", Napi::String::New(env, "INC"));
-            } else if (doStr.find("beh") != std::string::npos) {
-                doObj.Set("cdc", Napi::String::New(env, "INS"));
-            } else if (doStr.find("max") != std::string::npos ||
-                       doStr.find("set") != std::string::npos) {
-                doObj.Set("cdc", Napi::String::New(env, "ASG"));
-            } else if (doStr.find("phy") != std::string::npos ||
-                       doStr.find("nam") != std::string::npos) {
-                doObj.Set("cdc", Napi::String::New(env, "LPL"));
-            } else if (doStr.find("str") != std::string::npos) {
-                doObj.Set("cdc", Napi::String::New(env, "DPL"));
-            } else if (doStr.find("ledrs") != std::string::npos) {
-                doObj.Set("cdc", Napi::String::New(env, "INS"));
-            } else if (doStr.find("health") != std::string::npos) {
-                doObj.Set("cdc", Napi::String::New(env, "INS"));
-            } else if (doStr.find("loc") != std::string::npos) {
-                doObj.Set("cdc", Napi::String::New(env, "SPS"));
-            } else if (doStr.find("optmh") != std::string::npos) {
-                doObj.Set("cdc", Napi::String::New(env, "INS"));
-            } else if (doStr.find("diag") != std::string::npos) {
-                doObj.Set("cdc", Napi::String::New(env, "INS"));
-            } else {
-                doObj.Set("cdc", Napi::String::New(env, "Unknown"));
-            }
-            
-            doArray.Set(doIndex++, doObj);
-            dObj = LinkedList_getNext(dObj);
-        }
-        LinkedList_destroy(dataObjects);
-    } else {
-        printf("  ERROR: Failed to get DataObjects for %s, error: %d\n", lnRef.c_str(), error);
-    }
-    
-    result.Set("dataObjects", doArray);
-    result.Set("dataObjectsCount", Napi::Number::New(env, doIndex));
-    
-    // Также получаем DataSets для этого LN
-    Napi::Array dsArray = Napi::Array::New(env);
-    uint32_t dsIndex = 0;
-    
-    LinkedList dataSets = IedConnection_getLogicalNodeDirectory(
-        connection_, &error, lnRef.c_str(), ACSI_CLASS_DATA_SET);
-    
-    if (error == IED_ERROR_OK && dataSets) {
-        printf("  Found DataSets for %s:\n", lnRef.c_str());
-        LinkedList ds = LinkedList_getNext(dataSets);
-        while (ds) {
-            char* dsName = (char*)ds->data;
-            if (!dsName) { 
-                ds = LinkedList_getNext(ds); 
-                continue; 
-            }
-            
-            std::string dsRef = lnRef + "." + dsName;
-            printf("    DataSet: %s\n", dsName);
-            
-            Napi::Object dsObj = Napi::Object::New(env);
-            dsObj.Set("name", Napi::String::New(env, dsName));
-            dsObj.Set("reference", Napi::String::New(env, dsRef));
-            dsObj.Set("type", Napi::String::New(env, "dataset"));
-            
-            dsArray.Set(dsIndex++, dsObj);
-            ds = LinkedList_getNext(ds);
-        }
-        LinkedList_destroy(dataSets);
-    }
-    
-    result.Set("dataSets", dsArray);
-    result.Set("dataSetsCount", Napi::Number::New(env, dsIndex));
-    
-    return result;
-}
-
-// Функция для получения деталей DataObject
-Napi::Value MmsClient::GetDataObjectDetails(Napi::Env env, const std::string& doRef) {
-    printf("GetDataObjectDetails: %s\n", doRef.c_str());
-    
-    IedClientError error;
-    Napi::Object result = Napi::Object::New(env);
-    result.Set("type", Napi::String::New(env, "dataObject"));
-    result.Set("reference", Napi::String::New(env, doRef));
-    
-    // Извлекаем имя DO из ссылки
-    size_t dotPos = doRef.find_last_of('.');
-    if (dotPos != std::string::npos) {
-        std::string doName = doRef.substr(dotPos + 1);
-        result.Set("name", Napi::String::New(env, doName));
-    }
-    
-    // Рекурсивная функция для получения атрибутов
-    std::function<Napi::Value(const std::string&)> getAttributes;
-    getAttributes = [&](const std::string& ref) -> Napi::Value {
-        Napi::Object attributes = Napi::Object::New(env);
-        LinkedList attrList = IedConnection_getDataDirectory(connection_, &error, ref.c_str());
-        
-        if (error == IED_ERROR_OK && attrList) {
-            LinkedList entry = attrList;
-            while (entry) {
-                if (entry->data) {
-                    char* attrName = (char*)entry->data;
-                    std::string attrRef = ref + "." + attrName;
-                    
-                    // Определяем FC
-                    FunctionalConstraint fc = IEC61850_FC_ST;
-                    std::string attrNameStr(attrName);
-                    
-                    if (attrNameStr.find("stVal") != std::string::npos ||
-                        attrNameStr.find("q") != std::string::npos ||
-                        attrNameStr.find("t") != std::string::npos) {
-                        fc = IEC61850_FC_ST;
-                    } else if (attrNameStr.find("mag") != std::string::npos ||
-                               attrNameStr.find("range") != std::string::npos) {
-                        fc = IEC61850_FC_MX;
-                    } else if (attrNameStr.find("ctlModel") != std::string::npos ||
-                               attrNameStr.find("Oper") != std::string::npos ||
-                               attrNameStr.find("Cancel") != std::string::npos) {
-                        fc = IEC61850_FC_CF;
-                    } else if (attrNameStr.find("NamPlt") != std::string::npos ||
-                               attrNameStr.find("PhyNam") != std::string::npos ||
-                               attrNameStr.find("vendor") != std::string::npos) {
-                        fc = IEC61850_FC_DC;
-                    } else if (attrNameStr.find("AnIn") != std::string::npos) {
-                        fc = IEC61850_FC_MX;
-                    }
-                    
-                    // Проверяем, есть ли дочерние элементы
-                    LinkedList childList = IedConnection_getDataDirectory(connection_, &error, attrRef.c_str());
-                    if (childList) {
-                        // Это структура
-                        Napi::Value childAttrs = getAttributes(attrRef);
-                        if (!childAttrs.IsNull()) {
-                            Napi::Object attrInfo = Napi::Object::New(env);
-                            attrInfo.Set("name", Napi::String::New(env, attrName));
-                            attrInfo.Set("reference", Napi::String::New(env, attrRef));
-                            attrInfo.Set("fc", Napi::Number::New(env, fc));
-                            attrInfo.Set("isStructure", Napi::Boolean::New(env, true));
-                            attrInfo.Set("attributes", childAttrs);
-                            attributes.Set(attrName, attrInfo);
-                        }
-                        LinkedList_destroy(childList);
-                    } else {
-                        // Простой атрибут
-                        Napi::Object attrInfo = Napi::Object::New(env);
-                        attrInfo.Set("name", Napi::String::New(env, attrName));
-                        attrInfo.Set("reference", Napi::String::New(env, attrRef));
-                        attrInfo.Set("fc", Napi::Number::New(env, fc));
-                        attrInfo.Set("isStructure", Napi::Boolean::New(env, false));
-                        attributes.Set(attrName, attrInfo);
-                    }
-                }
-                entry = LinkedList_getNext(entry);
-            }
-            LinkedList_destroy(attrList);
-        }
-        
-        return attributes;
-    };
-    
-    Napi::Value attributes = getAttributes(doRef);
-    result.Set("attributes", attributes);
-    
-    return result;
-}
-
-// Функция для получения деталей DataSet
-Napi::Value MmsClient::GetDataSetDetails(Napi::Env env, const std::string& dsRef) {
-    printf("GetDataSetDetails: %s\n", dsRef.c_str());
-    
-    IedClientError error;
-    bool isDeletable = false;
-    
-    Napi::Object result = Napi::Object::New(env);
-    result.Set("type", Napi::String::New(env, "dataset"));
-    result.Set("reference", Napi::String::New(env, dsRef));
-    
-    // Извлекаем имя DS из ссылки
-    size_t dotPos = dsRef.find_last_of('.');
-    if (dotPos != std::string::npos) {
-        std::string dsName = dsRef.substr(dotPos + 1);
-        result.Set("name", Napi::String::New(env, dsName));
-    }
-    
-    // Проверяем, не закэширован ли уже этот DataSet
-    {
-        std::lock_guard<std::recursive_mutex> lock(connMutex_);
-        if (datasetCache_.find(dsRef) != datasetCache_.end()) {
-            printf("  DataSet %s already cached, skipping detailed caching\n", dsRef.c_str());
-            
-            // Возвращаем информацию из кэша
-            DataSetCache& cache = datasetCache_[dsRef];
-            Napi::Array memberArray = Napi::Array::New(env);
-            
-            for (size_t i = 0; i < cache.memberRefs.size(); ++i) {
-                Napi::Object memberObj = Napi::Object::New(env);
-                memberObj.Set("reference", Napi::String::New(env, cache.memberRefs[i]));
-                
-                // Извлекаем имя атрибута из ссылки
-                size_t lastDot = cache.memberRefs[i].rfind('.');
-                if (lastDot != std::string::npos) {
-                    std::string attrName = cache.memberRefs[i].substr(lastDot + 1);
-                    memberObj.Set("name", Napi::String::New(env, attrName));
-                }
-                
-                memberArray.Set(i, memberObj);
-            }
-            
-            result.Set("isDeletable", Napi::Boolean::New(env, false)); // Невозможно определить из кэша
-            result.Set("members", memberArray);
-            result.Set("memberCount", Napi::Number::New(env, cache.memberRefs.size()));
-            result.Set("alreadyCached", Napi::Boolean::New(env, true));
-            
-            return result;
-        }
-    }
-    
-    // Получаем члены DataSet (только если не закэширован)
-    LinkedList members = IedConnection_getDataSetDirectory(
-        connection_, &error, dsRef.c_str(), &isDeletable);
-    
-    if (error != IED_ERROR_OK || !members) {
-        printf("  ERROR: Cannot get dataset directory, error: %d\n", error);
-        result.Set("isValid", false);
-        result.Set("errorReason", Napi::String::New(env, "Cannot get dataset directory"));
-        return result;
-    }
-    
-    // Собираем ссылки на членов
-    std::vector<std::string> memberRefs;
-    LinkedList entry = members;
-    int memberCount = 0;
-    
-    Napi::Array memberArray = Napi::Array::New(env);
-    uint32_t memberIndex = 0;
-    
-    printf("  DataSet members:\n");
-    while (entry) {
-        if (entry->data) {
-            char* memberRef = (char*)entry->data;
-            std::string memberRefStr(memberRef);
-            memberRefs.push_back(memberRefStr);
-            
-            printf("    [%d] %s\n", memberCount + 1, memberRef);
-            
-            Napi::Object memberObj = Napi::Object::New(env);
-            memberObj.Set("reference", Napi::String::New(env, memberRefStr));
-            
-            // Извлекаем имя атрибута из ссылки
-            size_t lastDot = memberRefStr.rfind('.');
-            if (lastDot != std::string::npos) {
-                std::string attrName = memberRefStr.substr(lastDot + 1);
-                memberObj.Set("name", Napi::String::New(env, attrName));
-            }
-            
-            memberArray.Set(memberIndex++, memberObj);
-            memberCount++;
-        }
-        entry = LinkedList_getNext(entry);
-    }
-    
-    LinkedList_destroy(members);
-    
-    result.Set("isDeletable", Napi::Boolean::New(env, isDeletable));
-    result.Set("members", memberArray);
-    result.Set("memberCount", Napi::Number::New(env, memberCount));
-    result.Set("alreadyCached", Napi::Boolean::New(env, false));
-    
-    // КЭШИРУЕМ структуры для этого DataSet
-    printf("  Caching structure for DataSet: %s (%d members)\n", dsRef.c_str(), memberCount);
-    CacheDataSetStructure(dsRef, memberRefs);
-    
-    return result;
-}
-
-// Функция для получения деталей отчета
-Napi::Value MmsClient::GetReportDetails(Napi::Env env, const std::string& rRef) {
-    printf("GetReportDetails: %s\n", rRef.c_str());
-    
-    IedClientError error;
-    Napi::Object result = Napi::Object::New(env);
-    result.Set("type", Napi::String::New(env, "report"));
-    result.Set("reference", Napi::String::New(env, rRef));
-    
-    // Извлекаем имя отчета из ссылки
-    size_t dotPos = rRef.find_last_of('.');
-    if (dotPos != std::string::npos) {
-        std::string rName = rRef.substr(dotPos + 1);
-        result.Set("name", Napi::String::New(env, rName));
-    }
-    
-    // Определяем тип отчета (RP или BR)
-    std::string reportType = "";
-    if (rRef.find("RP$") != std::string::npos) {
-        reportType = "RP";
-    } else if (rRef.find("BR$") != std::string::npos) {
-        reportType = "BR";
-    }
-    
-    result.Set("reportType", Napi::String::New(env, reportType));
-    
-    // Получаем информацию о RCB
-    ClientReportControlBlock rcb = nullptr;
-    if (reportType == "RP") {
-        rcb = IedConnection_getRCBValues(connection_, &error, rRef.c_str(), nullptr);
-    } else if (reportType == "BR") {
-        rcb = IedConnection_getRCBValues(connection_, &error, rRef.c_str(), nullptr);
-    }
-    
-    if (error != IED_ERROR_OK || !rcb) {
-        printf("  ERROR: Cannot get RCB values, error: %d\n", error);
-        result.Set("isValid", false);
-        result.Set("errorReason", Napi::String::New(env, "Cannot get RCB values"));
-        return result;
-    }
-    
-    // Получаем связанный DataSet
-    const char* datasetRef = ClientReportControlBlock_getDataSetReference(rcb);
-    if (datasetRef) {
-        std::string datasetRefStr(datasetRef);
-        
-        // НОРМАЛИЗУЕМ имя DataSet: заменяем $ на .
-        // В кэше используются имена с точкой, но сервер может возвращать с $
-        std::string normalizedDatasetRef = datasetRefStr;
-        std::replace(normalizedDatasetRef.begin(), normalizedDatasetRef.end(), '$', '.');
-        
-        printf("  Original dataset ref: %s\n", datasetRefStr.c_str());
-        printf("  Normalized dataset ref: %s\n", normalizedDatasetRef.c_str());
-        
-        result.Set("datasetRef", Napi::String::New(env, normalizedDatasetRef));
-        result.Set("originalDatasetRef", Napi::String::New(env, datasetRefStr));
-        
-        // Проверяем, не закэширован ли уже этот DataSet (по нормализованному имени)
-        bool datasetAlreadyCached = false;
-        {
-            std::lock_guard<std::recursive_mutex> lock(connMutex_);
-            datasetAlreadyCached = (datasetCache_.find(normalizedDatasetRef) != datasetCache_.end());
-        }
-        
-        if (!datasetAlreadyCached) {
-            printf("  Dataset %s not cached yet, caching now...\n", normalizedDatasetRef.c_str());
-            
-            // Получаем члены DataSet для кэширования (используем нормализованное имя)
-            bool isDeletable = false;
-            LinkedList members = IedConnection_getDataSetDirectory(
-                connection_, &error, normalizedDatasetRef.c_str(), &isDeletable);
-            
-            if (error == IED_ERROR_OK && members) {
-                // Собираем ссылки на членов
-                std::vector<std::string> memberRefs;
-                LinkedList entry = members;
-                
-                while (entry) {
-                    if (entry->data) {
-                        char* memberRef = (char*)entry->data;
-                        memberRefs.push_back(std::string(memberRef));
-                    }
-                    entry = LinkedList_getNext(entry);
-                }
-                
-                LinkedList_destroy(members);
-                
-                // КЭШИРУЕМ структуры для этого DataSet
-                printf("  Caching structure for Report's DataSet: %s\n", normalizedDatasetRef.c_str());
-                CacheDataSetStructure(normalizedDatasetRef, memberRefs);
-            } else {
-                printf("  WARNING: Failed to get DataSet directory for %s, error: %d\n", 
-                       normalizedDatasetRef.c_str(), error);
-                
-                // Попробуем получить с оригинальным именем
-                bool isDeletable2 = false;
-                LinkedList members2 = IedConnection_getDataSetDirectory(
-                    connection_, &error, datasetRefStr.c_str(), &isDeletable2);
-                
-                if (error == IED_ERROR_OK && members2) {
-                    std::vector<std::string> memberRefs;
-                    LinkedList entry = members2;
-                    
-                    while (entry) {
-                        if (entry->data) {
-                            char* memberRef = (char*)entry->data;
-                            memberRefs.push_back(std::string(memberRef));
-                        }
-                        entry = LinkedList_getNext(entry);
-                    }
-                    
-                    LinkedList_destroy(members2);
-                    
-                    printf("  Caching structure for Report's DataSet (original name): %s\n", normalizedDatasetRef.c_str());
-                    CacheDataSetStructure(normalizedDatasetRef, memberRefs);
-                }
-            }
-        } else {
-            printf("  Dataset %s already cached, skipping\n", normalizedDatasetRef.c_str());
-            result.Set("datasetAlreadyCached", Napi::Boolean::New(env, true));
-        }
-    }
-    
-    // Получаем состояние отчета
-    bool rptEna = ClientReportControlBlock_getRptEna(rcb);
-    result.Set("enabled", Napi::Boolean::New(env, rptEna));
-    
-    // Получаем Report ID
-    const char* rptId = ClientReportControlBlock_getRptId(rcb);
-    if (rptId) {
-        result.Set("reportId", Napi::String::New(env, rptId));
-    }
-    
-    // Получаем другие параметры отчета
-    int trgOps = ClientReportControlBlock_getTrgOps(rcb);
-    int intgPd = ClientReportControlBlock_getIntgPd(rcb);
-    int bufTm = ClientReportControlBlock_getBufTm(rcb);
-    bool gi = ClientReportControlBlock_getGI(rcb);
-    
-    result.Set("trgOps", Napi::Number::New(env, trgOps));
-    result.Set("intgPd", Napi::Number::New(env, intgPd));
-    result.Set("bufTm", Napi::Number::New(env, bufTm));
-    result.Set("gi", Napi::Boolean::New(env, gi));
-    
-    ClientReportControlBlock_destroy(rcb);
-    result.Set("isValid", true);
-    
-    return result;
-}
-
 Napi::Value MmsClient::BrowseDataModel(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
 
@@ -3206,21 +3387,23 @@ Napi::Value MmsClient::BrowseDataModel(const Napi::CallbackInfo& info) {
         return env.Null();
     }
 
-    std::lock_guard<std::recursive_mutex> lock(connMutex_);
-    
-    // Если параметр не передан - возвращаем только корневые узлы
-    if (info.Length() == 0) {
-        return GetRootNodes(env);
+    // Определяем строку ссылки (если есть)
+    std::string ref;
+    if (info.Length() > 0 && info[0].IsString()) {
+        ref = info[0].As<Napi::String>().Utf8Value();
     }
-    
-    // Если передан параметр
-    if (info.Length() >= 1 && info[0].IsString()) {
-        std::string ref = info[0].As<Napi::String>().Utf8Value();
-        return BrowseSpecificObject(env, ref);
-    }
-    
-    Napi::TypeError::New(env, "Expected string parameter or no parameters").ThrowAsJavaScriptException();
-    return env.Null();
+
+    auto deferred = Napi::Promise::Deferred::New(env);
+    BrowseDataModelWorker* worker = new BrowseDataModelWorker(
+        this,
+        connection_,
+        connMutex_,
+        env,
+        ref,
+        deferred
+    );
+    worker->Queue();
+    return deferred.Promise();
 }
 
 Napi::Value MmsClient::CreateDataSet(const Napi::CallbackInfo& info) {
@@ -3422,6 +3605,8 @@ Napi::Value MmsClient::GetDataSetDirectory(const Napi::CallbackInfo& info) {
 
 Napi::Value MmsClient::ReadData(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
+
+    // Проверка входных параметров (как и раньше)
     if (info.Length() < 1) {
         Napi::TypeError::New(env, "Expected dataRef or array of dataRefs").ThrowAsJavaScriptException();
         return env.Undefined();
@@ -3442,124 +3627,32 @@ Napi::Value MmsClient::ReadData(const Napi::CallbackInfo& info) {
         return env.Undefined();
     }
 
-    ////std::lock_guard<std::mutex> lock(connMutex_);
-    std::lock_guard<std::recursive_mutex> lock(connMutex_);
+    if (dataRefs.empty()) {
+        Napi::TypeError::New(env, "No valid data references provided").ThrowAsJavaScriptException();
+        return env.Undefined();
+    }
+
+    // Быстрая проверка соединения (без длительной блокировки)
     if (!connected_) {
         Napi::Error::New(env, "Not connected").ThrowAsJavaScriptException();
-        return env.Null();
+        return env.Undefined();
     }
 
-    Napi::Array results = Napi::Array::New(env, dataRefs.size());
-    
-    for (size_t i = 0; i < dataRefs.size(); ++i) {
-        const std::string& ref = dataRefs[i];
-        Napi::Object item = Napi::Object::New(env);
-        item.Set("dataRef", Napi::String::New(env, ref));
+    // Создаём Promise
+    auto deferred = Napi::Promise::Deferred::New(env);
 
-        IedClientError error;
-        MmsValue* value = nullptr;
-        
-        std::string actualRef = ref;
-        FunctionalConstraint fc = IEC61850_FC_ST;
-        
-        // Извлекаем FC из ссылки
-        size_t bracketPos = ref.find('[');
-        if (bracketPos != std::string::npos && ref.back() == ']') {
-            std::string fcStr = ref.substr(bracketPos + 1, ref.length() - bracketPos - 2);
-            fc = ParseFCFromString(fcStr);
-            actualRef = ref.substr(0, bracketPos);
-            
-            //printf("ReadData: Parsed ref '%s' -> actualRef='%s', fc=%d\n", ref.c_str(), actualRef.c_str(), fc);
-        }
-        
-        // Пытаемся прочитать значение с указанным FC
-        value = IedConnection_readObject(connection_, &error, actualRef.c_str(), fc);
-        
-        // Если не получилось, пробуем альтернативные FC
-        if (error != IED_ERROR_OK || !value) {
-            std::vector<FunctionalConstraint> fcs = {
-                IEC61850_FC_ST, IEC61850_FC_MX, IEC61850_FC_CO,
-                IEC61850_FC_CF, IEC61850_FC_DC, IEC61850_FC_SP,
-                IEC61850_FC_SG, IEC61850_FC_ALL
-            };
-            
-            for (auto tryFc : fcs) {
-                if (tryFc == fc) continue; // Уже пробовали
-                
-                if (value) {
-                    MmsValue_delete(value);
-                    value = nullptr;
-                }
-                
-                value = IedConnection_readObject(connection_, &error, actualRef.c_str(), tryFc);
-                if (error == IED_ERROR_OK && value) {
-                    fc = tryFc;
-                    //printf("ReadData: Success with alternative FC=%d for '%s'\n", fc, actualRef.c_str());
-                    break;
-                }
-            }
-        }
+    // Создаём и запускаем воркер
+    ReadDataWorker* worker = new ReadDataWorker(
+        this,
+        connection_,
+        connMutex_,
+        env,
+        dataRefs,
+        deferred
+    );
 
-        if (error != IED_ERROR_OK || !value) {          
-            item.Set("isValid", false);
-            std::string errorReason;
-            switch (error) {
-                case IED_ERROR_OBJECT_DOES_NOT_EXIST:
-                    errorReason = "Object does not exist: " + ref;
-                    break;
-                case IED_ERROR_ACCESS_DENIED:
-                    errorReason = "Access denied: " + ref;
-                    break;
-                case IED_ERROR_TYPE_INCONSISTENT:
-                    errorReason = "Type inconsistent: " + ref;
-                    break;
-                case IED_ERROR_OBJECT_ACCESS_UNSUPPORTED:
-                    errorReason = "Object access unsupported: " + ref;
-                    break;
-                default:
-                    errorReason = "Read failed for " + ref + ": error " + std::to_string(error);
-                    break;
-            }
-            item.Set("errorReason", Napi::String::New(env, errorReason));
-            item.Set("value", Napi::String::New(env, errorReason)); // Возвращаем ошибку как значение
-            
-            printf("ReadData: Failed to read %s, error: %d, reason: %s\n", 
-                   ref.c_str(), error, errorReason.c_str());
-        } else {
-            // Проверяем, не является ли значение ошибкой доступа
-            int type = MmsValue_getType(value);
-            
-            if (type == MMS_DATA_ACCESS_ERROR) {
-                item.Set("isValid", false);
-                item.Set("errorReason", Napi::String::New(env, "Data access error for " + ref));
-                item.Set("value", Napi::String::New(env, "Data access error"));
-            } else {
-                // Извлекаем имя атрибута
-                std::string attrName = actualRef;
-                size_t lastDot = actualRef.rfind('.');
-                if (lastDot != std::string::npos) {
-                    attrName = actualRef.substr(lastDot + 1);
-                }
-                
-                // Для атрибутов stVal добавляем [ST] если его нет
-                if ((attrName.find("stVal") != std::string::npos || attrName.find("Pos") != std::string::npos) &&
-                    ref.find('[') == std::string::npos) {
-                    attrName += "[ST]";
-                }
-                
-                item.Set("isValid", true);
-                item.Set("value", SafeConvertMmsValue(env, connection_, this, ref, value, attrName, 0));
-                
-                printf("ReadData: Successfully read %s, type: %d\n", ref.c_str(), type);
-            }
-            
-            MmsValue_delete(value);
-        }
-
-        results.Set(static_cast<uint32_t>(i), item);
-    }
-
-    return results;
+    worker->Queue();
+    return deferred.Promise();
 }
 
 Napi::Value MmsClient::ControlObject(const Napi::CallbackInfo& info) {
