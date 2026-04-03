@@ -811,6 +811,8 @@ namespace {
                         Napi::Object obj = Napi::Object::New(env);
                         obj.Set("name", Napi::String::New(env, ln.name));
                         obj.Set("reference", Napi::String::New(env, ln.reference));
+                        // Добавляем поле "type" для логического узла
+                        obj.Set("type", Napi::String::New(env, "logicalNode"));
 
                         Napi::Array dsArr = Napi::Array::New(env, ln.dataSets.size());
                         for (size_t j = 0; j < ln.dataSets.size(); ++j) {
@@ -842,7 +844,7 @@ namespace {
                 case BrowseResult::LOGICAL_NODE: {
                     const auto& ln = result_.logicalNode;
                     Napi::Object obj = Napi::Object::New(env);
-                    obj.Set("type", Napi::String::New(env, "logicalNode"));
+                    obj.Set("type", Napi::String::New(env, "logicalNode")); // уже было
                     obj.Set("reference", Napi::String::New(env, ln.reference));
                     obj.Set("name", Napi::String::New(env, ln.name));
 

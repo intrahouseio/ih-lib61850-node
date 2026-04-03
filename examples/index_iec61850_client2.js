@@ -552,33 +552,36 @@ async function handleConnectionOpened2() {
 async function exploreModel() {
     try {
         console.log('\n=== 1. Получение корневых узлов ===');
-        const rootNodes = await client.browseDataModel();
-        
+        const rootNodes = await client.browseDataModel();  // теперь только name, reference, type
+
         console.log('\nНайдено Logical Nodes:');
-        rootNodes.forEach((ln, index) => {
-            console.log(`\n${index + 1}. ${ln.name} (${ln.reference})`);
-            
-            // Выводим ВСЕ датасеты
-            if (ln.dataSets && ln.dataSets.length > 0) {
-                console.log(`   Datasets (${ln.dataSets.length}):`);
-                ln.dataSets.forEach((ds, idx) => {
+        for (const ln of rootNodes) {
+            console.log(`\n${ln.name} (${ln.reference})`);
+
+            // Получаем детальную информацию о логическом узле
+            const lnDetails = await client.browseDataModel(ln.reference);
+
+            // Выводим DataSets
+            if (lnDetails.dataSets && lnDetails.dataSets.length > 0) {
+                console.log(`   Datasets (${lnDetails.dataSets.length}):`);
+                lnDetails.dataSets.forEach((ds, idx) => {
                     console.log(`     ${idx + 1}. ${ds.name}: ${ds.reference}`);
                 });
             } else {
                 console.log(`   Datasets: 0`);
             }
-            
-            // Выводим ВСЕ отчеты
-            if (ln.reports && ln.reports.length > 0) {
-                console.log(`   Reports (${ln.reports.length}):`);
-                ln.reports.forEach((report, idx) => {
+
+            // Выводим Reports
+            if (lnDetails.reports && lnDetails.reports.length > 0) {
+                console.log(`   Reports (${lnDetails.reports.length}):`);
+                lnDetails.reports.forEach((report, idx) => {
                     const typeDesc = report.type === 'RP' ? 'Unbuffered' : 'Buffered';
                     console.log(`     ${idx + 1}. ${report.name} (${report.type} - ${typeDesc}): ${report.reference}`);
                 });
             } else {
                 console.log(`   Reports: 0`);
             }
-        });
+        }
         
         // Выбираем LLN0 для дальнейшего исследования
         const lln0 = rootNodes.find(ln => ln.name === 'LLN0');
