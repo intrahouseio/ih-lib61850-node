@@ -38,10 +38,7 @@ public:
     // флаг для управления соединением
     bool connectionClosingIntentionally_ = false;
 
-    std::unordered_map<std::string, DataSetCache>& GetDataSetCacheMutable() { return datasetCache_; }
 
-    bool IsConnected() const { return connected_; }
-    IedConnection GetConnection() const { return connection_; }
 
     struct ReportInfo {
         ClientReportControlBlock rcb = nullptr;
@@ -119,8 +116,8 @@ public:
     // Методы для работы с кэшем
     void CacheDataSetStructure(const std::string& datasetRef, 
                               const std::vector<std::string>& memberRefs);
-    bool GetCachedElementNames(const std::string& fullRef, std::vector<std::string>& elementNames);
-
+    bool GetCachedElementNames(const std::string& ref, FunctionalConstraint fc,
+                              std::vector<std::string>& elementNames);
     void CacheStructureElements(const std::string& ref, FunctionalConstraint fc,
                                const std::vector<std::string>& elementNames,
                                const std::vector<MmsType>& elementTypes);

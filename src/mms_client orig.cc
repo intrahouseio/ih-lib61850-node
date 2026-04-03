@@ -50,30 +50,6 @@ struct ElementInfo {
     FunctionalConstraint fc;
 };
 
-static std::string FunctionalConstraintToString(FunctionalConstraint fc) {
-    switch (fc) {
-        case IEC61850_FC_ST: return "ST";
-        case IEC61850_FC_MX: return "MX";
-        case IEC61850_FC_CO: return "CO";
-        case IEC61850_FC_CF: return "CF";
-        case IEC61850_FC_DC: return "DC";
-        case IEC61850_FC_SP: return "SP";
-        case IEC61850_FC_SG: return "SG";
-        case IEC61850_FC_BR: return "BR";
-        case IEC61850_FC_RP: return "RP";
-        case IEC61850_FC_EX: return "EX";
-        case IEC61850_FC_SR: return "SR";
-        case IEC61850_FC_OR: return "OR";
-        case IEC61850_FC_BL: return "BL";
-        case IEC61850_FC_LG: return "LG";
-        case IEC61850_FC_GO: return "GO";
-        case IEC61850_FC_MS: return "MS";
-        case IEC61850_FC_US: return "US";
-        case IEC61850_FC_ALL: return "ALL";
-        default: return std::to_string(fc);
-    }
-}
-
 namespace {
     // Структуры для хранения результатов обхода модели (используются в BrowseDataModelWorker)
 
@@ -161,17 +137,27 @@ namespace {
     };
 
     // Получить список логических устройств и узлов (только имена, без подробностей)
-    static std::vector<LogicalNodeInfo> GetRootNodesWorker(IedConnection connection) {
+    static std::vector<LogicalNodeInfo> GetRootNodesWorker(IedConnection connection,
+                                                        std::recursive_timed_mutex& mutex) {
         std::vector<LogicalNodeInfo> result;
+
         IedClientError error;
-        LinkedList deviceList = IedConnection_getLogicalDeviceList(connection, &error);
+        LinkedList deviceList = nullptr;
+        {
+            std::lock_guard<std::recursive_timed_mutex> lock(mutex);
+            deviceList = IedConnection_getLogicalDeviceList(connection, &error);
+        }
         if (error != IED_ERROR_OK || !deviceList) return result;
 
         LinkedList device = deviceList;
         while (device) {
             char* ldName = (char*)device->data;
             if (ldName) {
-                LinkedList nodeList = IedConnection_getLogicalDeviceDirectory(connection, &error, ldName);
+                LinkedList nodeList = nullptr;
+                {
+                    std::lock_guard<std::recursive_timed_mutex> lock(mutex);
+                    nodeList = IedConnection_getLogicalDeviceDirectory(connection, &error, ldName);
+                }
                 if (error == IED_ERROR_OK && nodeList) {
                     LinkedList node = nodeList;
                     while (node) {
@@ -182,8 +168,12 @@ namespace {
                             lnInfo.name = lnName;
                             lnInfo.reference = lnRef;
 
-                            // Получаем DataSets (без мьютекса)
-                            LinkedList dataSetList = IedConnection_getLogicalNodeDirectory(connection, &error, lnRef.c_str(), ACSI_CLASS_DATA_SET);
+                            // Получаем DataSets этого узла (только имена)
+                            LinkedList dataSetList = nullptr;
+                            {
+                                std::lock_guard<std::recursive_timed_mutex> lock(mutex);
+                                dataSetList = IedConnection_getLogicalNodeDirectory(connection, &error, lnRef.c_str(), ACSI_CLASS_DATA_SET);
+                            }
                             if (error == IED_ERROR_OK && dataSetList) {
                                 LinkedList ds = dataSetList;
                                 while (ds) {
@@ -200,8 +190,12 @@ namespace {
                                 LinkedList_destroy(dataSetList);
                             }
 
-                            // Получаем Reports (без мьютекса)
-                            LinkedList varList = IedConnection_getLogicalNodeVariables(connection, &error, lnRef.c_str());
+                            // Получаем Reports этого узла (RCB)
+                            LinkedList varList = nullptr;
+                            {
+                                std::lock_guard<std::recursive_timed_mutex> lock(mutex);
+                                varList = IedConnection_getLogicalNodeVariables(connection, &error, lnRef.c_str());
+                            }
                             if (error == IED_ERROR_OK && varList) {
                                 LinkedList var = varList;
                                 while (var) {
@@ -237,7 +231,9 @@ namespace {
     }
 
     // Получить детали логического узла
-    static LogicalNodeDetails GetLogicalNodeDetailsWorker(IedConnection connection, const std::string& lnRef) {
+    static LogicalNodeDetails GetLogicalNodeDetailsWorker(IedConnection connection,
+                                                        std::recursive_timed_mutex& mutex,
+                                                        const std::string& lnRef) {
         LogicalNodeDetails details;
         details.reference = lnRef;
         size_t slashPos = lnRef.find_last_of('/');
@@ -248,8 +244,12 @@ namespace {
 
         IedClientError error;
 
-        // DataObjects – без мьютекса
-        LinkedList doList = IedConnection_getLogicalNodeDirectory(connection, &error, lnRef.c_str(), ACSI_CLASS_DATA_OBJECT);
+        // DataObjects
+        LinkedList doList = nullptr;
+        {
+            std::lock_guard<std::recursive_timed_mutex> lock(mutex);
+            doList = IedConnection_getLogicalNodeDirectory(connection, &error, lnRef.c_str(), ACSI_CLASS_DATA_OBJECT);
+        }
         if (error == IED_ERROR_OK && doList) {
             LinkedList doItem = doList;
             while (doItem) {
@@ -263,7 +263,8 @@ namespace {
                     DataObjectInfo doi;
                     doi.name = doName;
                     doi.reference = lnRef + "." + doName;
-                    // Определение CDC (без изменений)
+
+                    // Определяем CDC по имени (без мьютекса)
                     std::string lower = doNameStr;
                     std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
                     if (lower.find("pos") != std::string::npos || lower.find("swi") != std::string::npos)
@@ -284,6 +285,7 @@ namespace {
                         doi.cdc = "DPL";
                     else
                         doi.cdc = "Unknown";
+
                     details.dataObjects.push_back(doi);
                 }
                 doItem = LinkedList_getNext(doItem);
@@ -292,7 +294,11 @@ namespace {
         }
 
         // DataSets
-        LinkedList dsList = IedConnection_getLogicalNodeDirectory(connection, &error, lnRef.c_str(), ACSI_CLASS_DATA_SET);
+        LinkedList dsList = nullptr;
+        {
+            std::lock_guard<std::recursive_timed_mutex> lock(mutex);
+            dsList = IedConnection_getLogicalNodeDirectory(connection, &error, lnRef.c_str(), ACSI_CLASS_DATA_SET);
+        }
         if (error == IED_ERROR_OK && dsList) {
             LinkedList dsItem = dsList;
             while (dsItem) {
@@ -314,9 +320,8 @@ namespace {
         return details;
     }
 
-
     // Получить детали DataSet (с возможностью кэширования)
-    /*static DataSetDetails GetDataSetDetailsWorker(IedConnection connection,
+    static DataSetDetails GetDataSetDetailsWorker(IedConnection connection,
                                                 std::recursive_timed_mutex& mutex,
                                                 MmsClient* client,
                                                 const std::string& dsRef) {
@@ -390,188 +395,10 @@ namespace {
         }
 
         return details;
-    }*/
-
-    static DataSetDetails GetDataSetDetailsWorker(IedConnection connection, MmsClient* client, const std::string& dsRef) {
-    DataSetDetails details;
-    details.reference = dsRef;
-    size_t dotPos = dsRef.find_last_of('.');
-    if (dotPos != std::string::npos)
-        details.name = dsRef.substr(dotPos + 1);
-    else
-        details.name = dsRef;
-
-    details.isValid = true;
-
-    // Проверка кэша – короткая блокировка
-    bool cached = false;
-    {
-        std::lock_guard<std::recursive_timed_mutex> lock(client->GetMutex());
-        auto it = client->GetDataSetCache().find(dsRef);
-        if (it != client->GetDataSetCache().end()) {
-            cached = true;
-            details.alreadyCached = true;
-            details.isDeletable = false;
-            details.memberCount = it->second.memberRefs.size();
-            for (const auto& memberRef : it->second.memberRefs) {
-                std::string memberName = memberRef;
-                size_t lastDot = memberRef.rfind('.');
-                if (lastDot != std::string::npos)
-                    memberName = memberRef.substr(lastDot + 1);
-                details.members.emplace_back(memberRef, memberName);
-            }
-        }
-    }
-    if (cached) return details;
-
-    details.alreadyCached = false;
-    IedClientError error;
-    bool isDeletable = false;
-    LinkedList members = IedConnection_getDataSetDirectory(connection, &error, dsRef.c_str(), &isDeletable);
-    if (error != IED_ERROR_OK || !members) {
-        details.isValid = false;
-        details.errorReason = "Cannot get dataset directory, error: " + std::to_string(error);
-        return details;
-    }
-
-    details.isDeletable = isDeletable;
-    std::vector<std::string> memberRefs;
-    LinkedList entry = members;
-    while (entry) {
-        if (entry->data) {
-            char* memberRef = (char*)entry->data;
-            memberRefs.push_back(std::string(memberRef));
-            std::string memberName = std::string(memberRef);
-            size_t lastDot = memberRefs.back().rfind('.');
-            if (lastDot != std::string::npos)
-                memberName = memberRefs.back().substr(lastDot + 1);
-            details.members.emplace_back(std::string(memberRef), memberName);
-        }
-        entry = LinkedList_getNext(entry);
-    }
-    LinkedList_destroy(members);
-    details.memberCount = memberRefs.size();
-
-    // Кэшируем – короткая блокировка
-    {
-        std::lock_guard<std::recursive_timed_mutex> lock(client->GetMutex());
-        client->CacheDataSetStructure(dsRef, memberRefs);
-    }
-
-    return details;
-}
-
-    /*static void CollectStructureInfo(IedConnection connection,
-                                 const std::string& baseRef,
-                                 FunctionalConstraint fc,
-                                 std::unordered_map<std::string, StructureElementNames>& outCache,
-                                 int recursionDepth = 0) {
-    const int MAX_DEPTH = 5;
-    if (recursionDepth > MAX_DEPTH) return;
-    
-    IedClientError error;
-    MmsVariableSpecification* spec = IedConnection_getVariableSpecification(connection, &error, baseRef.c_str(), fc);
-    if (error != IED_ERROR_OK || !spec) return;
-    
-    int type = MmsVariableSpecification_getType(spec);
-    if (type == MMS_STRUCTURE) {
-        int size = MmsVariableSpecification_getSize(spec);
-        std::vector<std::string> names;
-        std::vector<MmsType> types;
-        for (int i = 0; i < size; ++i) {
-            MmsVariableSpecification* child = MmsVariableSpecification_getChildSpecificationByIndex(spec, i);
-            if (child) {
-                const char* name = MmsVariableSpecification_getName(child);
-                if (name) {
-                    names.push_back(name);
-                    types.push_back(static_cast<MmsType>(MmsVariableSpecification_getType(child)));
-                    if (types.back() == MMS_STRUCTURE) {
-                        std::string childRef = baseRef + "." + name;
-                        CollectStructureInfo(connection, childRef, fc, outCache, recursionDepth + 1);
-                    }
-                }
-            }
-        }
-        std::string fcStr = FunctionalConstraint_toString(fc);
-        std::string cacheKey = baseRef + "[" + fcStr + "]";
-        outCache[cacheKey] = {cacheKey, fc, names, types};
-    }
-    MmsVariableSpecification_destroy(spec);
-}*/
-    static void CollectStructureInfo(IedConnection connection,
-                                    const std::string& baseRef,
-                                    FunctionalConstraint fc,
-                                    std::unordered_map<std::string, StructureElementNames>& outCache,
-                                    int recursionDepth = 0) {
-        const int MAX_DEPTH = 5;
-        if (recursionDepth > MAX_DEPTH) return;
-
-        IedClientError error;
-        MmsVariableSpecification* spec = IedConnection_getVariableSpecification(connection, &error, baseRef.c_str(), fc);
-        
-        // Если не удалось получить спецификацию с заданным FC, пробуем другие
-        if (error != IED_ERROR_OK || !spec) {
-            // Пробуем ST, MX, CF, ALL
-            std::vector<FunctionalConstraint> fallbackFc = {
-                IEC61850_FC_ST, IEC61850_FC_MX, IEC61850_FC_CF,
-                IEC61850_FC_DC, IEC61850_FC_SP, IEC61850_FC_SG,
-                IEC61850_FC_ALL
-            };
-            for (auto tryFc : fallbackFc) {
-                if (tryFc == fc) continue;
-                spec = IedConnection_getVariableSpecification(connection, &error, baseRef.c_str(), tryFc);
-                if (error == IED_ERROR_OK && spec) {
-                    fc = tryFc; // используем найденный FC
-                    break;
-                }
-            }
-        }
-        
-        if (error != IED_ERROR_OK || !spec) {
-            // Если всё равно не получили, возможно, это структура, которую нужно обработать иначе
-            // Например, для Control Object можно попробовать получить спецификацию для baseRef + ".Oper"
-            std::string operRef = baseRef + ".Oper";
-            spec = IedConnection_getVariableSpecification(connection, &error, operRef.c_str(), IEC61850_FC_CO);
-            if (error != IED_ERROR_OK || !spec) {
-                return; // совсем не удалось
-            }
-            // Успешно получили спецификацию для Oper, но тогда имена будут для Oper, а не для Mod
-            // Поэтому нужно скорректировать baseRef? Это сложно. Проще сохранить кэш для Mod как есть,
-            // но с именами от Oper? Неправильно.
-            // Лучше вернуться и не кэшировать.
-            MmsVariableSpecification_destroy(spec);
-            return;
-        }
-
-        int type = MmsVariableSpecification_getType(spec);
-        if (type == MMS_STRUCTURE) {
-            int size = MmsVariableSpecification_getSize(spec);
-            std::vector<std::string> names;
-            std::vector<MmsType> types;
-            for (int i = 0; i < size; ++i) {
-                MmsVariableSpecification* child = MmsVariableSpecification_getChildSpecificationByIndex(spec, i);
-                if (child) {
-                    const char* name = MmsVariableSpecification_getName(child);
-                    if (name) {
-                        names.push_back(name);
-                        types.push_back(static_cast<MmsType>(MmsVariableSpecification_getType(child)));
-                        if (types.back() == MMS_STRUCTURE) {
-                            std::string childRef = baseRef + "." + name;
-                            CollectStructureInfo(connection, childRef, fc, outCache, recursionDepth + 1);
-                        }
-                    }
-                }
-            }
-            std::string fcStr = FunctionalConstraint_toString(fc);
-            std::string cacheKey = baseRef + "[" + fcStr + "]";
-            outCache[cacheKey] = {cacheKey, fc, names, types};
-            printf("CollectStructureInfo: Cached %s with %zu names\n", cacheKey.c_str(), names.size());
-        }
-        MmsVariableSpecification_destroy(spec);
     }
 
     // Получить детали отчета (с возможностью кэширования)
-    /*static ReportDetails GetReportDetailsWorker(IedConnection connection,
+    static ReportDetails GetReportDetailsWorker(IedConnection connection,
                                                 std::recursive_timed_mutex& mutex,
                                                 MmsClient* client,
                                                 const std::string& rRef) {
@@ -657,82 +484,7 @@ namespace {
         ClientReportControlBlock_destroy(rcb);
         details.isValid = true;
         return details;
-    }*/
-
-    static ReportDetails GetReportDetailsWorker(IedConnection connection, MmsClient* client, const std::string& rRef) {
-    ReportDetails details;
-    details.reference = rRef;
-    size_t dotPos = rRef.find_last_of('.');
-    if (dotPos != std::string::npos)
-        details.name = rRef.substr(dotPos + 1);
-    else
-        details.name = rRef;
-
-    if (rRef.find("RP$") != std::string::npos)
-        details.reportType = "RP";
-    else if (rRef.find("BR$") != std::string::npos)
-        details.reportType = "BR";
-    else {
-        details.isValid = false;
-        details.errorReason = "Unknown report type";
-        return details;
     }
-
-    IedClientError error;
-    ClientReportControlBlock rcb = IedConnection_getRCBValues(connection, &error, rRef.c_str(), nullptr);
-    if (error != IED_ERROR_OK || !rcb) {
-        details.isValid = false;
-        details.errorReason = "Cannot get RCB values, error: " + std::to_string(error);
-        return details;
-    }
-
-    const char* datasetRefRaw = ClientReportControlBlock_getDataSetReference(rcb);
-    if (datasetRefRaw) {
-        details.datasetRef = datasetRefRaw;
-        details.originalDatasetRef = datasetRefRaw;
-        std::string normalized = details.datasetRef;
-        std::replace(normalized.begin(), normalized.end(), '$', '.');
-        details.datasetRef = normalized;
-
-        // Проверка кэша – короткая блокировка
-        bool cached = false;
-        {
-            std::lock_guard<std::recursive_timed_mutex> lock(client->GetMutex());
-            cached = client->GetDataSetCache().find(normalized) != client->GetDataSetCache().end();
-        }
-        details.datasetAlreadyCached = cached;
-        if (!cached) {
-            bool isDeletable = false;
-            LinkedList members = IedConnection_getDataSetDirectory(connection, &error, normalized.c_str(), &isDeletable);
-            if (error == IED_ERROR_OK && members) {
-                std::vector<std::string> memberRefs;
-                LinkedList entry = members;
-                while (entry) {
-                    if (entry->data)
-                        memberRefs.push_back((char*)entry->data);
-                    entry = LinkedList_getNext(entry);
-                }
-                LinkedList_destroy(members);
-                {
-                    std::lock_guard<std::recursive_timed_mutex> lock(client->GetMutex());
-                    client->CacheDataSetStructure(normalized, memberRefs);
-                }
-            }
-        }
-    }
-
-    details.enabled = ClientReportControlBlock_getRptEna(rcb);
-    const char* rptId = ClientReportControlBlock_getRptId(rcb);
-    if (rptId) details.reportId = rptId;
-    details.trgOps = ClientReportControlBlock_getTrgOps(rcb);
-    details.intgPd = ClientReportControlBlock_getIntgPd(rcb);
-    details.bufTm = ClientReportControlBlock_getBufTm(rcb);
-    details.gi = ClientReportControlBlock_getGI(rcb);
-
-    ClientReportControlBlock_destroy(rcb);
-    details.isValid = true;
-    return details;
-}
 
     class BrowseDataModelWorker : public Napi::AsyncWorker {
     public:
@@ -752,41 +504,39 @@ namespace {
 
         ~BrowseDataModelWorker() {}
 
-      void Execute() override {
-            IedConnection localConn = nullptr;
-            bool isConnected = false;
-            {
-                std::lock_guard<std::recursive_timed_mutex> lock(connMutex_);
-                isConnected = client_->IsConnected();        // используем геттер
-                localConn = client_->GetConnection();        // используем геттер
-            }
-            if (!isConnected || !localConn) {
-                result_.type = BrowseResult::ERROR;
-                result_.errorReason = "Not connected";
-                return;
-            }
-
+        void Execute() override {
             if (ref_.empty()) {
+                // Корневой обход – выполняется без удержания мьютекса на всё время
                 result_.type = BrowseResult::ROOT_NODES;
-                result_.rootNodes = GetRootNodesWorker(localConn);
+                result_.rootNodes = GetRootNodesWorker(connection_, connMutex_);
             } else {
+                // Определяем тип по ссылке
                 size_t dotPos = ref_.find('.');
                 if (dotPos == std::string::npos) {
+                    // Логический узел
                     result_.type = BrowseResult::LOGICAL_NODE;
-                    result_.logicalNode = GetLogicalNodeDetailsWorker(localConn, ref_);
+                    result_.logicalNode = GetLogicalNodeDetailsWorker(connection_, connMutex_, ref_);
                 } else {
+                    // Есть точка – может быть DO, DS или Report
                     std::string objectPart = ref_.substr(dotPos + 1);
+                    // Проверяем, является ли DataSet
                     IedClientError error;
                     bool isDeletable = false;
-                    LinkedList members = IedConnection_getDataSetDirectory(localConn, &error, ref_.c_str(), &isDeletable);
+                    LinkedList members = nullptr;
+                    {
+                        std::lock_guard<std::recursive_timed_mutex> lock(connMutex_);
+                        members = IedConnection_getDataSetDirectory(connection_, &error, ref_.c_str(), &isDeletable);
+                    }
                     if (error == IED_ERROR_OK && members) {
                         LinkedList_destroy(members);
                         result_.type = BrowseResult::DATA_SET;
-                        result_.dataSet = GetDataSetDetailsWorker(localConn, client_, ref_);
+                        result_.dataSet = GetDataSetDetailsWorker(connection_, connMutex_, client_, ref_);
                     } else if (objectPart.find('$') != std::string::npos) {
+                        // Report
                         result_.type = BrowseResult::REPORT;
-                        result_.report = GetReportDetailsWorker(localConn, client_, ref_);
+                        result_.report = GetReportDetailsWorker(connection_, connMutex_, client_, ref_);
                     } else {
+                        // DataObject
                         result_.type = BrowseResult::DATA_OBJECT;
                         result_.dataObject.reference = ref_;
                         size_t lastDot = ref_.rfind('.');
@@ -970,131 +720,117 @@ namespace {
     
     // Асинхронный воркер для ReadDataSetModel
     class ReadDataSetModelWorker : public Napi::AsyncWorker {
-public:
-    ReadDataSetModelWorker(MmsClient* client,
-                           IedConnection connection,
-                           std::recursive_timed_mutex& connMutex,
-                           Napi::Env env,
-                           const std::vector<std::string>& datasetRefs,
-                           Napi::Promise::Deferred deferred)
-        : Napi::AsyncWorker(env),
-          client_(client),
-          connection_(connection),
-          connMutex_(connMutex),
-          env_(env),
-          datasetRefs_(datasetRefs),
-          deferred_(deferred) {}
+    public:
+        ReadDataSetModelWorker(MmsClient* client,
+                            IedConnection connection,
+                            std::recursive_timed_mutex& connMutex,
+                            Napi::Env env,
+                            const std::vector<std::string>& datasetRefs,
+                            Napi::Promise::Deferred deferred)
+            : Napi::AsyncWorker(env),
+            client_(client),
+            connection_(connection),
+            connMutex_(connMutex),
+            env_(env),
+            datasetRefs_(datasetRefs),
+            deferred_(deferred) {}
 
-    ~ReadDataSetModelWorker() {}
+        ~ReadDataSetModelWorker() {}
 
-    void Execute() override {
-    for (const auto& dsRef : datasetRefs_) {
-        DataSetReadResult res;
-        res.datasetRef = dsRef;
-        res.isValid = false;
+        void Execute() override {
+            for (const auto& dsRef : datasetRefs_) {
+                DataSetReadResult res;
+                res.datasetRef = dsRef;
+                res.isValid = false;
 
-        // --- Шаг 1: Получение директории DataSet и memberRefs (под мьютексом) ---
-        std::vector<std::string> memberRefs;
-        bool isDeletable = false;
-        {
-            std::lock_guard<std::recursive_timed_mutex> lock(connMutex_);
-            IedClientError error;
-            LinkedList members = IedConnection_getDataSetDirectory(
-                connection_, &error, dsRef.c_str(), &isDeletable);
+                // --- Шаг 1: Получение директории DataSet и memberRefs (под мьютексом) ---
+                std::vector<std::string> memberRefs;
+                bool isDeletable = false;
+                {
+                    std::lock_guard<std::recursive_timed_mutex> lock(connMutex_);
+                    IedClientError error;
+                    LinkedList members = IedConnection_getDataSetDirectory(
+                        connection_, &error, dsRef.c_str(), &isDeletable);
 
-            if (error != IED_ERROR_OK || !members) {
-                res.errorReason = "Cannot get dataset directory, error: " + std::to_string(error);
+                    if (error != IED_ERROR_OK || !members) {
+                        res.errorReason = "Cannot get dataset directory, error: " + std::to_string(error);
+                        results_.push_back(res);
+                        continue;
+                    }
+
+                    LinkedList entry = members;
+                    while (entry) {
+                        if (entry->data) {
+                            char* memberRef = (char*)entry->data;
+                            memberRefs.push_back(std::string(memberRef));
+                        }
+                        entry = LinkedList_getNext(entry);
+                    }
+                    LinkedList_destroy(members);
+
+                    // Кэшируем имена членов DataSet
+                    client_->CacheDataSetStructure(dsRef, memberRefs);
+                }
+
+                res.memberRefs = memberRefs;
+
+                // --- Шаг 2: Чтение значений DataSet (БЕЗ мьютекса) ---
+                IedClientError error;
+                ClientDataSet clientDataSet = nullptr;
+                clientDataSet = IedConnection_readDataSetValues(
+                    connection_, &error, dsRef.c_str(), nullptr);
+
+                if (error != IED_ERROR_OK || !clientDataSet) {
+                    res.errorReason = "Cannot read dataset values, error: " + std::to_string(error);
+                    results_.push_back(res);
+                    continue;
+                }
+
+                MmsValue* valuesArray = ClientDataSet_getValues(clientDataSet);
+                if (!valuesArray || MmsValue_getType(valuesArray) != MMS_ARRAY) {
+                    res.errorReason = "Invalid dataset values format";
+                    ClientDataSet_destroy(clientDataSet);
+                    results_.push_back(res);
+                    continue;
+                }
+
+                int arraySize = MmsValue_getArraySize(valuesArray);
+                int elementsToProcess = std::min(arraySize, (int)memberRefs.size());
+                res.isValid = true;
+                res.isDeletable = isDeletable;
+                res.count = elementsToProcess;
+
+                // Конвертация значений
+                std::vector<MmsClient::ResultData> rawValues;
+                for (int i = 0; i < elementsToProcess; ++i) {
+                    MmsValue* val = MmsValue_getElement(valuesArray, i);
+                    if (!val) continue;
+
+                    const std::string& fullRef = memberRefs[i];
+                    std::string attrName = fullRef;
+                    size_t lastDot = fullRef.rfind('.');
+                    if (lastDot != std::string::npos) attrName = fullRef.substr(lastDot + 1);
+
+                    MmsClient::ResultData rd = ConvertMmsValueForReportFast(val, attrName, 0);
+                    rawValues.push_back(rd);
+                }
+
+                // --- Шаг 3: Применение кэшированных имён структур (снова под мьютексом) ---
+                {
+                    std::lock_guard<std::recursive_timed_mutex> lock(connMutex_);
+                    for (size_t i = 0; i < rawValues.size(); ++i) {
+                        const std::string& fullRef = memberRefs[i];
+                        if (rawValues[i].type == MMS_STRUCTURE) {
+                            EnhanceResultDataWithCachedNames(client_, rawValues[i], fullRef, 0);
+                        }
+                    }
+                }
+
+                res.values = std::move(rawValues);
+                ClientDataSet_destroy(clientDataSet);
                 results_.push_back(res);
-                continue;
-            }
-
-            LinkedList entry = members;
-            while (entry) {
-                if (entry->data) {
-                    char* memberRef = (char*)entry->data;
-                    memberRefs.push_back(std::string(memberRef));
-                }
-                entry = LinkedList_getNext(entry);
-            }
-            LinkedList_destroy(members);
-
-            // Кэшируем имена членов DataSet
-            client_->CacheDataSetStructure(dsRef, memberRefs);
-        }
-        res.memberRefs = memberRefs;
-
-        // --- Шаг 2: Рекурсивное кэширование структур (как в старой версии) ---
-        // Этот шаг получает имена элементов структур с сервера и заполняет кэш
-        for (const auto& memberRef : memberRefs) {
-            std::string cleanRef = memberRef;
-            FunctionalConstraint fc = IEC61850_FC_ST;
-            size_t bracketPos = memberRef.find('[');
-            if (bracketPos != std::string::npos && memberRef.back() == ']') {
-                std::string fcStr = memberRef.substr(bracketPos + 1, memberRef.length() - bracketPos - 2);
-                cleanRef = memberRef.substr(0, bracketPos);
-                fc = ParseFCFromString(fcStr);
-            }
-            // Рекурсивное кэширование структуры (сетевые вызовы без мьютекса)
-            RecursiveCacheStructureElements(connection_, client_, cleanRef, fc, 0);
-        }
-
-        // --- Шаг 3: Чтение значений DataSet (БЕЗ мьютекса) ---
-        IedClientError error;
-        ClientDataSet clientDataSet = nullptr;
-        clientDataSet = IedConnection_readDataSetValues(
-            connection_, &error, dsRef.c_str(), nullptr);
-
-        if (error != IED_ERROR_OK || !clientDataSet) {
-            res.errorReason = "Cannot read dataset values, error: " + std::to_string(error);
-            results_.push_back(res);
-            continue;
-        }
-
-        MmsValue* valuesArray = ClientDataSet_getValues(clientDataSet);
-        if (!valuesArray || MmsValue_getType(valuesArray) != MMS_ARRAY) {
-            res.errorReason = "Invalid dataset values format";
-            ClientDataSet_destroy(clientDataSet);
-            results_.push_back(res);
-            continue;
-        }
-
-        int arraySize = MmsValue_getArraySize(valuesArray);
-        int elementsToProcess = std::min(arraySize, (int)memberRefs.size());
-        res.isValid = true;
-        res.isDeletable = isDeletable;
-        res.count = elementsToProcess;
-
-        // Конвертация значений
-        std::vector<MmsClient::ResultData> rawValues;
-        for (int i = 0; i < elementsToProcess; ++i) {
-            MmsValue* val = MmsValue_getElement(valuesArray, i);
-            if (!val) continue;
-
-            const std::string& fullRef = memberRefs[i];
-            std::string attrName = fullRef;
-            size_t lastDot = fullRef.rfind('.');
-            if (lastDot != std::string::npos) attrName = fullRef.substr(lastDot + 1);
-
-            MmsClient::ResultData rd = ConvertMmsValueForReportFast(val, attrName, 0);
-            rawValues.push_back(rd);
-        }
-
-        // --- Шаг 4: Применение кэшированных имён структур (снова под мьютексом) ---
-        {
-            std::lock_guard<std::recursive_timed_mutex> lock(connMutex_);
-            for (size_t i = 0; i < rawValues.size(); ++i) {
-                const std::string& fullRef = memberRefs[i];
-                if (rawValues[i].type == MMS_STRUCTURE) {
-                    EnhanceResultDataWithCachedNames(client_, rawValues[i], fullRef, 0);
-                }
             }
         }
-
-        res.values = std::move(rawValues);
-        ClientDataSet_destroy(clientDataSet);
-        results_.push_back(res);
-    }
-}
 
         void OnOK() override {
             Napi::Env env = env_;
@@ -1161,7 +897,7 @@ public:
     };
     
     // Асинхронный воркер для PollDataSetValues
-    /*class PollDataSetValuesWorker : public Napi::AsyncWorker {
+    class PollDataSetValuesWorker : public Napi::AsyncWorker {
     public:
         PollDataSetValuesWorker(MmsClient* client,
                                 IedConnection connection,
@@ -1313,163 +1049,7 @@ public:
         std::vector<std::string> datasetRefs_;
         Napi::Promise::Deferred deferred_;
         std::vector<DataSetPollResult> results_;
-    };*/
-    class PollDataSetValuesWorker : public Napi::AsyncWorker {
-public:
-    PollDataSetValuesWorker(MmsClient* client,
-                            IedConnection connection,
-                            std::recursive_timed_mutex& connMutex,
-                            Napi::Env env,
-                            const std::vector<std::string>& datasetRefs,
-                            Napi::Promise::Deferred deferred)
-        : Napi::AsyncWorker(env),
-          client_(client),
-          connection_(connection),
-          connMutex_(connMutex),
-          env_(env),
-          datasetRefs_(datasetRefs),
-          deferred_(deferred) {}
-    
-    ~PollDataSetValuesWorker() {}
-    
-    void Execute() override {
-        IedConnection localConn = nullptr;
-        bool isConnected = false;
-        {
-            std::lock_guard<std::recursive_timed_mutex> lock(connMutex_);
-            isConnected = client_->IsConnected();
-            localConn = client_->GetConnection();
-        }
-        if (!isConnected || !localConn) {
-            for (const auto& dsRef : datasetRefs_) {
-                DataSetPollResult res;
-                res.datasetRef = dsRef;
-                res.isValid = false;
-                res.errorReason = "Not connected";
-                results_.push_back(res);
-            }
-            return;
-        }
-
-        for (const auto& dsRef : datasetRefs_) {
-            DataSetPollResult res;
-            res.datasetRef = dsRef;
-            res.isValid = false;
-
-            // Получаем memberRefs из кэша (короткая блокировка)
-            std::vector<std::string> memberRefs;
-            {
-                std::lock_guard<std::recursive_timed_mutex> lock(connMutex_);
-                auto cacheIt = client_->GetDataSetCache().find(dsRef);
-                if (cacheIt == client_->GetDataSetCache().end()) {
-                    res.errorReason = "DataSet not cached";
-                    results_.push_back(res);
-                    continue;
-                }
-                memberRefs = cacheIt->second.memberRefs;
-            }
-
-            // Чтение DataSet (без мьютекса)
-            IedClientError error;
-            ClientDataSet clientDataSet = nullptr;
-            auto readStart = std::chrono::steady_clock::now();
-            clientDataSet = IedConnection_readDataSetValues(localConn, &error, dsRef.c_str(), nullptr);
-            auto readEnd = std::chrono::steady_clock::now();
-            res.readTimeMicros = std::chrono::duration_cast<std::chrono::microseconds>(readEnd - readStart).count();
-
-            if (error != IED_ERROR_OK || !clientDataSet) {
-                res.errorReason = "Cannot read dataset values, error: " + std::to_string(error);
-                results_.push_back(res);
-                continue;
-            }
-
-            MmsValue* valuesArray = ClientDataSet_getValues(clientDataSet);
-            if (!valuesArray || MmsValue_getType(valuesArray) != MMS_ARRAY) {
-                res.errorReason = "Invalid dataset values format";
-                ClientDataSet_destroy(clientDataSet);
-                results_.push_back(res);
-                continue;
-            }
-
-            int arraySize = MmsValue_getArraySize(valuesArray);
-            int elementsToProcess = std::min(arraySize, (int)memberRefs.size());
-            auto processStart = std::chrono::steady_clock::now();
-
-            std::vector<MmsClient::ResultData> rawValues;
-            rawValues.reserve(elementsToProcess);
-            for (int i = 0; i < elementsToProcess; ++i) {
-                MmsValue* val = MmsValue_getElement(valuesArray, i);
-                if (!val) continue;
-                const std::string& fullRef = memberRefs[i];
-                std::string attrName = fullRef;
-                size_t lastDot = fullRef.rfind('.');
-                if (lastDot != std::string::npos) attrName = fullRef.substr(lastDot + 1);
-                MmsClient::ResultData rd = ConvertMmsValueForReportFast(val, attrName, 0);
-                rawValues.push_back(rd);
-            }
-            auto processEnd = std::chrono::steady_clock::now();
-            res.processTimeMicros = std::chrono::duration_cast<std::chrono::microseconds>(processEnd - processStart).count();
-
-            // Применение кэшированных имён структур (короткая блокировка)
-            {
-                std::lock_guard<std::recursive_timed_mutex> lock(connMutex_);
-                for (size_t i = 0; i < rawValues.size(); ++i) {
-                    const std::string& fullRef = memberRefs[i];
-                    if (rawValues[i].type == MMS_STRUCTURE) {
-                        // Вызываем функцию улучшения с передачей полной ссылки
-                        EnhanceResultDataWithCachedNames(client_, rawValues[i], fullRef, 0);
-                    }
-                }
-            }
-
-            res.values = std::move(rawValues);
-            res.isValid = true;
-            res.count = elementsToProcess;
-            res.memberRefs = std::move(memberRefs);
-            ClientDataSet_destroy(clientDataSet);
-            results_.push_back(res);
-        }
-    }
-    
-    void OnOK() override {
-        Napi::Env env = env_;
-        Napi::Array resultArray = Napi::Array::New(env, results_.size());
-        for (size_t idx = 0; idx < results_.size(); ++idx) {
-            DataSetPollResult& res = results_[idx];
-            Napi::Object obj = Napi::Object::New(env);
-            obj.Set("datasetRef", Napi::String::New(env, res.datasetRef));
-            obj.Set("isValid", Napi::Boolean::New(env, res.isValid));
-            if (!res.isValid) {
-                obj.Set("errorReason", Napi::String::New(env, res.errorReason));
-            } else {
-                obj.Set("count", Napi::Number::New(env, res.count));
-                obj.Set("readTimeMicros", Napi::Number::New(env, (double)res.readTimeMicros));
-                obj.Set("processTimeMicros", Napi::Number::New(env, (double)res.processTimeMicros));
-                Napi::Object valuesObj = Napi::Object::New(env);
-                for (size_t i = 0; i < res.values.size(); ++i) {
-                    Napi::Value jsValue = ResultDataToNapiWithNames(env, res.values[i], res.memberRefs[i]);
-                    valuesObj.Set(res.memberRefs[i], jsValue);
-                }
-                obj.Set("values", valuesObj);
-            }
-            resultArray.Set((uint32_t)idx, obj);
-        }
-        deferred_.Resolve(resultArray);
-    }
-    
-    void OnError(const Napi::Error& e) override {
-        deferred_.Reject(e.Value());
-    }
-    
-private:
-    MmsClient* client_;
-    IedConnection connection_;
-    std::recursive_timed_mutex& connMutex_;
-    Napi::Env env_;
-    std::vector<std::string> datasetRefs_;
-    Napi::Promise::Deferred deferred_;
-    std::vector<DataSetPollResult> results_;
-};
+    };
 
      // Результат быстрого чтения одного DataRef (poll)
     struct ReadDataResult {
@@ -1480,7 +1060,7 @@ private:
         FunctionalConstraint usedFc;   // какой FC был успешно использован
     };
 
-    /*class ReadDataWorker : public Napi::AsyncWorker {
+    class ReadDataWorker : public Napi::AsyncWorker {
     public:
         ReadDataWorker(MmsClient* client,
                     IedConnection connection,
@@ -1654,151 +1234,7 @@ private:
         std::vector<std::string> dataRefs_;
         Napi::Promise::Deferred deferred_;
         std::vector<ReadDataResult> results_;
-    };*/
-    class ReadDataWorker : public Napi::AsyncWorker {
-public:
-    ReadDataWorker(MmsClient* client,
-                   IedConnection connection,
-                   std::recursive_timed_mutex& connMutex,
-                   Napi::Env env,
-                   const std::vector<std::string>& dataRefs,
-                   Napi::Promise::Deferred deferred)
-        : Napi::AsyncWorker(env),
-          client_(client),
-          connection_(connection),
-          connMutex_(connMutex),
-          env_(env),
-          dataRefs_(dataRefs),
-          deferred_(deferred) {}
-    
-    ~ReadDataWorker() {}
-    
-    void Execute() override {
-        IedConnection localConn = nullptr;
-        bool isConnected = false;
-        {
-            std::lock_guard<std::recursive_timed_mutex> lock(connMutex_);
-            isConnected = client_->IsConnected();
-            localConn = client_->GetConnection();
-        }
-        if (!isConnected || !localConn) {
-            for (const auto& ref : dataRefs_) {
-                ReadDataResult res;
-                res.dataRef = ref;
-                res.isValid = false;
-                res.errorReason = "Not connected";
-                results_.push_back(res);
-            }
-            return;
-        }
-
-        for (const auto& ref : dataRefs_) {
-            ReadDataResult res;
-            res.dataRef = ref;
-            res.isValid = false;
-
-            std::string actualRef;
-            FunctionalConstraint requestedFc = IEC61850_FC_ST;
-            size_t bracketPos = ref.find('[');
-            if (bracketPos != std::string::npos && ref.back() == ']') {
-                std::string fcStr = ref.substr(bracketPos + 1, ref.length() - bracketPos - 2);
-                requestedFc = ParseFCFromString(fcStr);
-                actualRef = ref.substr(0, bracketPos);
-            } else {
-                actualRef = ref;
-            }
-
-            IedClientError error;
-            MmsValue* value = nullptr;
-            FunctionalConstraint usedFc = requestedFc;
-            std::vector<FunctionalConstraint> fallbackFcs = {
-                IEC61850_FC_ST, IEC61850_FC_MX, IEC61850_FC_CO,
-                IEC61850_FC_CF, IEC61850_FC_DC, IEC61850_FC_SP,
-                IEC61850_FC_SG, IEC61850_FC_ALL
-            };
-
-            value = IedConnection_readObject(localConn, &error, actualRef.c_str(), requestedFc);
-            if (error != IED_ERROR_OK || !value) {
-                for (auto tryFc : fallbackFcs) {
-                    if (tryFc == requestedFc) continue;
-                    if (value) { MmsValue_delete(value); value = nullptr; }
-                    value = IedConnection_readObject(localConn, &error, actualRef.c_str(), tryFc);
-                    if (error == IED_ERROR_OK && value) {
-                        usedFc = tryFc;
-                        break;
-                    }
-                }
-            }
-            if (error != IED_ERROR_OK || !value) {
-                res.errorReason = "Read failed for " + ref + ", error: " + std::to_string(error);
-                results_.push_back(res);
-                continue;
-            }
-            if (MmsValue_getType(value) == MMS_DATA_ACCESS_ERROR) {
-                res.errorReason = "Data access error for " + ref;
-                MmsValue_delete(value);
-                results_.push_back(res);
-                continue;
-            }
-
-            std::string attrName = actualRef;
-            size_t lastDot = actualRef.rfind('.');
-            if (lastDot != std::string::npos) attrName = actualRef.substr(lastDot + 1);
-            MmsClient::ResultData rd = ConvertMmsValueForReportFast(value, attrName, 0);
-
-            // Применяем кэш, если структура
-            if (rd.type == MMS_STRUCTURE) {
-                std::string fullRefWithFc = actualRef + "[" + FunctionalConstraintToString(usedFc) + "]";
-                std::lock_guard<std::recursive_timed_mutex> lock(connMutex_);
-                std::vector<std::string> elementNames;
-                if (client_->GetCachedElementNames(fullRefWithFc, elementNames)) {
-                    rd.structureElementNames = elementNames;
-                    // Рекурсивно улучшаем вложенные структуры (вызываем функцию)
-                    EnhanceResultDataWithCachedNames(client_, rd, fullRefWithFc, 0);
-                }
-            }
-
-            res.isValid = true;
-            res.value = std::move(rd);
-            res.usedFc = usedFc;
-            MmsValue_delete(value);
-            results_.push_back(res);
-        }
-    }
-    
-    void OnOK() override {
-        Napi::Env env = env_;
-        Napi::Array resultArray = Napi::Array::New(env, results_.size());
-        for (size_t idx = 0; idx < results_.size(); ++idx) {
-            ReadDataResult& res = results_[idx];
-            Napi::Object item = Napi::Object::New(env);
-            item.Set("dataRef", Napi::String::New(env, res.dataRef));
-            item.Set("isValid", Napi::Boolean::New(env, res.isValid));
-            if (!res.isValid) {
-                item.Set("errorReason", Napi::String::New(env, res.errorReason));
-                item.Set("value", Napi::String::New(env, res.errorReason));
-            } else {
-                Napi::Value jsValue = ResultDataToNapiWithNames(env, res.value, res.dataRef);
-                item.Set("value", jsValue);
-            }
-            resultArray.Set((uint32_t)idx, item);
-        }
-        deferred_.Resolve(resultArray);
-    }
-    
-    void OnError(const Napi::Error& e) override {
-        deferred_.Reject(e.Value());
-    }
-    
-private:
-    MmsClient* client_;
-    IedConnection connection_;
-    std::recursive_timed_mutex& connMutex_;
-    Napi::Env env_;
-    std::vector<std::string> dataRefs_;
-    Napi::Promise::Deferred deferred_;
-    std::vector<ReadDataResult> results_;
-};
+    };
 } // анонимный namespace
 
 Napi::FunctionReference MmsClient::constructor;
@@ -1807,14 +1243,6 @@ struct ConnectionHandlerContext {
     MmsClient* client;
     std::recursive_timed_mutex* mutex;  
 };
-
-// Структура для хранения информации о структуре (определена, например, в заголовке)
-struct StructureInfo {
-    std::vector<std::string> elementNames;
-    std::vector<MmsType> elementTypes;
-};
-
-
 
 void MmsClient::CheckConnectionHealth() {
     std::lock_guard<std::recursive_timed_mutex> lock(connMutex_);
@@ -1971,7 +1399,7 @@ static bool GetReportCachedElementNames(MmsClient::ReportInfo& reportInfo,
 }
 
 // Функция для улучшения структуры с использованием кэшированных имен
-/*static void EnhanceStructureWithCachedNames(MmsClient::ResultData& data,
+static void EnhanceStructureWithCachedNames(MmsClient::ResultData& data,
                                           const std::string& fullRef,
                                           MmsClient::ReportInfo& reportInfo,
                                           int depth = 0) {
@@ -2032,34 +1460,6 @@ static bool GetReportCachedElementNames(MmsClient::ReportInfo& reportInfo,
                 }
                 EnhanceStructureWithCachedNames(data.structureElements[i], childRef, reportInfo, depth + 1);
             }
-        }
-    }
-}*/
-
-static void EnhanceStructureWithCachedNames(MmsClient* client,
-                                            MmsClient::ResultData& data,
-                                            const std::string& fullRef,
-                                            int depth = 0) {
-    const int MAX_DEPTH = 5;
-    if (depth > MAX_DEPTH || data.type != MMS_STRUCTURE) return;
-
-    std::vector<std::string> elementNames;
-    if (client->GetCachedElementNames(fullRef, elementNames) &&
-        elementNames.size() == data.structureElements.size()) {
-        data.structureElementNames = elementNames;
-
-        // Извлекаем чистую ссылку и часть с FC
-        std::string cleanRef = fullRef;
-        std::string fcPart;
-        size_t bracketPos = fullRef.find('[');
-        if (bracketPos != std::string::npos) {
-            cleanRef = fullRef.substr(0, bracketPos);
-            fcPart = fullRef.substr(bracketPos);
-        }
-
-        for (size_t i = 0; i < data.structureElements.size(); ++i) {
-            std::string childRef = cleanRef + "." + elementNames[i] + fcPart;
-            EnhanceStructureWithCachedNames(client, data.structureElements[i], childRef, depth + 1);
         }
     }
 }
@@ -2499,7 +1899,7 @@ static void RecursiveCacheStructureElements(IedConnection connection,
     //printf("    [Cache-%d] FINISHED processing %s\n\n", recursionDepth, baseRef.c_str());
 }
 
-/*void MmsClient::CacheDataSetStructure(const std::string& datasetRef, 
+void MmsClient::CacheDataSetStructure(const std::string& datasetRef, 
                                      const std::vector<std::string>& memberRefs) {
     std::lock_guard<std::recursive_timed_mutex> lock(connMutex_);
 
@@ -2565,22 +1965,10 @@ static void RecursiveCacheStructureElements(IedConnection connection,
     datasetCache_[datasetRef] = cache;
     printf("\n=== Finished recursive caching for DataSet %s ===\n", datasetRef.c_str());
     printf("Total cached datasets: %zu\n", datasetCache_.size());
-}*/
-
-void MmsClient::CacheDataSetStructure(const std::string& datasetRef,
-                                       const std::vector<std::string>& memberRefs) {
-    std::lock_guard<std::recursive_timed_mutex> lock(connMutex_);
-    if (datasetCache_.find(datasetRef) != datasetCache_.end()) {
-        return; // уже закэширован
-    }
-    DataSetCache cache;
-    cache.datasetRef = datasetRef;
-    cache.memberRefs = memberRefs;
-    datasetCache_[datasetRef] = std::move(cache);
 }
 
 // Исправленный метод GetCachedElementNames
-/*bool MmsClient::GetCachedElementNames(const std::string& ref, FunctionalConstraint fc,
+bool MmsClient::GetCachedElementNames(const std::string& ref, FunctionalConstraint fc,
                                      std::vector<std::string>& elementNames) {
     std::lock_guard<std::recursive_timed_mutex> lock(connMutex_);
     
@@ -2645,27 +2033,6 @@ void MmsClient::CacheDataSetStructure(const std::string& datasetRef,
     }
     
     //printf("  ✗ No cached element names found for '%s' (fc=%d)\n", ref.c_str(), fc);
-    return false;
-}*/
-bool MmsClient::GetCachedElementNames(const std::string& fullRef, std::vector<std::string>& elementNames) {
-    std::lock_guard<std::recursive_timed_mutex> lock(connMutex_);
-    
-    printf("GetCachedElementNames: searching for '%s'\n", fullRef.c_str());
-    
-    for (const auto& [dsRef, cache] : datasetCache_) {
-        auto it = cache.structureCache.find(fullRef);
-        if (it != cache.structureCache.end()) {
-            elementNames = it->second.elementNames;
-            printf("  FOUND in dataset '%s', %zu names: ", dsRef.c_str(), elementNames.size());
-            for (size_t i = 0; i < elementNames.size() && i < 5; ++i) {
-                printf("%s ", elementNames[i].c_str());
-            }
-            if (elementNames.size() > 5) printf("...");
-            printf("\n");
-            return true;
-        }
-    }
-    printf("  NOT FOUND\n");
     return false;
 }
 
@@ -2746,7 +2113,7 @@ static Napi::Value ProcessStructureWithCache(Napi::Env env, MmsClient* client,
     bool hasCachedNames = false;
     
     if (client) {
-        hasCachedNames = client->GetCachedElementNames(cleanRef, elementNames);
+        hasCachedNames = client->GetCachedElementNames(cleanRef, fc, elementNames);
     }
     
     if (hasCachedNames && elementNames.size() == static_cast<size_t>(structSize)) {
@@ -3861,7 +3228,7 @@ static Napi::Value SafeConvertMmsValue(Napi::Env env, IedConnection connection, 
 }
 
 // Вспомогательная функция для применения кэша имён
-/*static void EnhanceResultDataWithCachedNames(MmsClient* client,
+static void EnhanceResultDataWithCachedNames(MmsClient* client,
                                              MmsClient::ResultData& data,
                                              const std::string& fullRef,
                                              int depth = 0) {
@@ -3890,48 +3257,6 @@ static Napi::Value SafeConvertMmsValue(Napi::Env env, IedConnection connection, 
             }
             EnhanceResultDataWithCachedNames(client, data.structureElements[i], childRef, depth + 1);
         }
-    }
-}*/
-
-static void EnhanceResultDataWithCachedNames(MmsClient* client,
-                                             MmsClient::ResultData& data,
-                                             const std::string& fullRef,
-                                             int depth = 0) {
-    const int MAX_DEPTH = 5;
-    if (depth > MAX_DEPTH || data.type != MMS_STRUCTURE) {
-        if (depth > MAX_DEPTH) {
-            printf("EnhanceResultDataWithCachedNames: max depth reached for %s\n", fullRef.c_str());
-        }
-        return;
-    }
-    
-    printf("EnhanceResultDataWithCachedNames: depth=%d, ref='%s', struct size=%zu\n", 
-           depth, fullRef.c_str(), data.structureElements.size());
-
-    std::vector<std::string> elementNames;
-    if (client->GetCachedElementNames(fullRef, elementNames) &&
-        elementNames.size() == data.structureElements.size()) {
-        
-        printf("  Applying cached names for %s\n", fullRef.c_str());
-        data.structureElementNames = elementNames;
-
-        // Извлекаем чистую ссылку и часть с FC
-        std::string cleanRef = fullRef;
-        std::string fcPart;
-        size_t bracketPos = fullRef.find('[');
-        if (bracketPos != std::string::npos && fullRef.back() == ']') {
-            cleanRef = fullRef.substr(0, bracketPos);
-            fcPart = fullRef.substr(bracketPos);
-        }
-
-        for (size_t i = 0; i < data.structureElements.size(); ++i) {
-            std::string childRef = cleanRef + "." + elementNames[i] + fcPart;
-            printf("  Recursing into child %zu: %s\n", i, childRef.c_str());
-            EnhanceResultDataWithCachedNames(client, data.structureElements[i], childRef, depth + 1);
-        }
-    } else {
-        printf("  No cache or size mismatch for %s (cache size=%zu, struct size=%zu)\n", 
-               fullRef.c_str(), elementNames.size(), data.structureElements.size());
     }
 }
 
@@ -4936,7 +4261,7 @@ static Napi::Value ResultDataToNapiWithNames(Napi::Env env,
     }
 }
 
-/*void MmsClient::ReportCallback(void* parameter, ClientReport report) {
+void MmsClient::ReportCallback(void* parameter, ClientReport report) {
     MmsClient* client = static_cast<MmsClient*>(parameter);
     
     uint64_t callbackEntryTime = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -5366,207 +4691,9 @@ static Napi::Value ResultDataToNapiWithNames(Napi::Env env,
     printf("  Callback total time: %llu ms (from entry to exit)\n", 
            callbackExitTime - callbackEntryTime);
     printf("=== ReportCallback [REPORT#%d] END ===\n\n", currentReport);
-}*/
-
-void MmsClient::ReportCallback(void* parameter, ClientReport report) {
-    MmsClient* client = static_cast<MmsClient*>(parameter);
-    
-    uint64_t callbackEntryTime = std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::steady_clock::now().time_since_epoch()).count();
-    
-    // Пытаемся захватить мьютекс с таймаутом 100 мс
-    std::unique_lock<std::recursive_timed_mutex> lock(client->connMutex_, std::defer_lock);
-    if (!lock.try_lock_for(std::chrono::milliseconds(100))) {
-        printf("ReportCallback: mutex busy, skipping report (client %s)\n", client->clientID_.c_str());
-        return;
-    }
-    
-    // Теперь мьютекс захвачен, можно безопасно работать с разделяемыми данными
-    if (client->isClosing_ || !client->connected_) {
-        printf("ReportCallback: client closing or disconnected, skipping\n");
-        return;
-    }
-    
-    auto startTime = std::chrono::steady_clock::now();
-    client->totalReportsProcessed_++;
-    int currentReport = client->totalReportsProcessed_.load();
-    
-    const char* rcbRefRaw = ClientReport_getRcbReference(report);
-    const char* rptIdRaw = ClientReport_getRptId(report);
-    if (!rcbRefRaw) {
-        printf("ReportCallback: no RCB reference\n");
-        return;
-    }
-    std::string rcbRef(rcbRefRaw);
-    std::string rptId = rptIdRaw ? rptIdRaw : "unknown";
-    
-    printf("\n=== ReportCallback [REPORT#%d] ===\n", currentReport);
-    printf("  RCB: %s, rptId: %s\n", rcbRef.c_str(), rptId.c_str());
-    
-    auto it = client->activeReports_.find(rcbRef);
-    if (it == client->activeReports_.end()) {
-        printf("  WARNING: ReportInfo not found for %s\n", rcbRef.c_str());
-        return;
-    }
-    ReportInfo& reportInfo = it->second;
-    
-    MmsValue* dataSetValues = ClientReport_getDataSetValues(report);
-    if (!dataSetValues) {
-        printf("  ERROR: dataSetValues is NULL\n");
-        return;
-    }
-    
-    int dataSetSize = MmsValue_getArraySize(dataSetValues);
-    const std::vector<std::string>& dataSetMembers = reportInfo.dataSetMembers;
-    int elementsToProcess = std::min(dataSetSize, (int)dataSetMembers.size());
-    
-    bool hasTimestamp = ClientReport_hasTimestamp(report);
-    uint64_t timestamp = hasTimestamp ? ClientReport_getTimestamp(report) : 0;
-    
-    struct ReportItemData {
-        std::string fullRef;
-        MmsClient::ResultData resultData;
-        int reason;
-    };
-    std::vector<ReportItemData> reportItems;
-    reportItems.reserve(elementsToProcess);
-    
-    // Рекурсивная функция обработки значений (без дополнительных блокировок, т.к. мьютекс уже удерживается)
-    std::function<MmsClient::ResultData(MmsValue*, const std::string&, int)> processValueRecursive;
-    processValueRecursive = [&](MmsValue* val, const std::string& fullRef, int recursionDepth) -> MmsClient::ResultData {
-        MmsClient::ResultData data;
-        const int MAX_RECURSION_DEPTH = 5;
-        if (recursionDepth > MAX_RECURSION_DEPTH) {
-            data.type = MMS_STRUCTURE;
-            data.isValid = false;
-            data.errorReason = "Max recursion depth exceeded";
-            return data;
-        }
-        if (!val) {
-            data.type = MMS_DATA_ACCESS_ERROR;
-            data.isValid = false;
-            data.errorReason = "Null value";
-            return data;
-        }
-        data.type = MmsValue_getType(val);
-        data.isValid = true;
-        
-        std::string attrName = fullRef;
-        size_t dotPos = fullRef.rfind('.');
-        if (dotPos != std::string::npos) attrName = fullRef.substr(dotPos + 1);
-        
-        bool isStatusStructure = false;
-        size_t bracketPos = fullRef.find('[');
-        if (bracketPos != std::string::npos) {
-            std::string fcPart = fullRef.substr(bracketPos);
-            if (fcPart.find("[ST]") != std::string::npos || fcPart.find("[st]") != std::string::npos) {
-                isStatusStructure = true;
-            }
-        }
-        
-        if (data.type == MMS_STRUCTURE) {
-            int size = MmsValue_getArraySize(val);
-            if (isStatusStructure && size >= 3) {
-                const char* stdNames[] = {"stVal", "q", "t"};
-                for (int i = 0; i < std::min(size, 3); ++i) {
-                    MmsValue* childVal = MmsValue_getElement(val, i);
-                    if (childVal) {
-                        std::string childFullRef = fullRef;
-                        if (bracketPos != std::string::npos) {
-                            childFullRef = fullRef.substr(0, bracketPos) + "." + stdNames[i] + fullRef.substr(bracketPos);
-                        } else {
-                            childFullRef = fullRef + "." + stdNames[i];
-                        }
-                        MmsClient::ResultData childData = processValueRecursive(childVal, childFullRef, recursionDepth + 1);
-                        data.structureElements.push_back(childData);
-                        data.structureElementNames.push_back(stdNames[i]);
-                    }
-                }
-            } else {
-                for (int i = 0; i < size; ++i) {
-                    MmsValue* childVal = MmsValue_getElement(val, i);
-                    if (childVal) {
-                        std::string indexName = std::to_string(i);
-                        std::string childFullRef = fullRef + "." + indexName;
-                        MmsClient::ResultData childData = processValueRecursive(childVal, childFullRef, recursionDepth + 1);
-                        data.structureElements.push_back(childData);
-                        data.structureElementNames.push_back(indexName);
-                    }
-                }
-            }
-        } else {
-            data = ConvertMmsValueForReportFast(val, attrName);
-        }
-        return data;
-    };
-    
-    for (int i = 0; i < elementsToProcess; ++i) {
-        ReasonForInclusion reason = ClientReport_getReasonForInclusion(report, i);
-        if (reason == IEC61850_REASON_NOT_INCLUDED) continue;
-        
-        const std::string& fullRef = dataSetMembers[i];
-        MmsValue* value = MmsValue_getElement(dataSetValues, i);
-        if (!value) continue;
-        
-        try {
-            MmsClient::ResultData rd = processValueRecursive(value, fullRef, 0);
-            ReportItemData item{fullRef, std::move(rd), reason};
-            reportItems.push_back(std::move(item));
-        } catch (const std::exception& e) {
-            printf("    Exception processing %s: %s\n", fullRef.c_str(), e.what());
-        }
-    }
-    
-    // Применяем кэшированные имена структур (уже под мьютексом)
-    for (auto& item : reportItems) {
-        if (item.resultData.type == MMS_STRUCTURE) {
-            EnhanceStructureWithCachedNames(client, item.resultData, item.fullRef, 0);
-        }
-    }
-    
-    // Отправка в JS через TSFN (копируем данные)
-    if (!reportItems.empty() && client->tsfn_) {
-        auto status = client->tsfn_.NonBlockingCall([client, rcbRef, rptId, timestamp, hasTimestamp, reportItems, currentReport]
-                                                    (Napi::Env env, Napi::Function cb) {
-            try {
-                Napi::Object eventObj = Napi::Object::New(env);
-                eventObj.Set("clientID", Napi::String::New(env, client->clientID_));
-                eventObj.Set("type", "data");
-                eventObj.Set("event", "report");
-                eventObj.Set("rcbRef", Napi::String::New(env, rcbRef));
-                eventObj.Set("rptId", Napi::String::New(env, rptId));
-                if (hasTimestamp) eventObj.Set("timestamp", Napi::Number::New(env, (double)timestamp));
-                
-                Napi::Object valuesObj = Napi::Object::New(env);
-                Napi::Object reasonsObj = Napi::Object::New(env);
-                for (const auto& item : reportItems) {
-                    Napi::Value jsValue = ResultDataToNapiWithNames(env, item.resultData, item.fullRef);
-                    valuesObj.Set(item.fullRef, jsValue);
-                    reasonsObj.Set(item.fullRef, item.reason);
-                }
-                eventObj.Set("values", valuesObj);
-                eventObj.Set("reasons", reasonsObj);
-                eventObj.Set("reportNumber", Napi::Number::New(env, currentReport));
-                eventObj.Set("itemsInReport", Napi::Number::New(env, (uint32_t)reportItems.size()));
-                eventObj.Set("totalElementsProcessed", Napi::Number::New(env, MmsClient::totalElementsProcessed_.load()));
-                
-                cb.Call({Napi::String::New(env, "data"), eventObj});
-            } catch (const std::exception& e) {
-                printf("  TSFN callback exception: %s\n", e.what());
-            }
-        });
-        if (status != napi_ok) {
-            printf("  Failed to queue report to TSFN\n");
-        }
-    }
-    
-    auto endTime = std::chrono::steady_clock::now();
-    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime);
-    printf("  Report processing time: %lld ms\n", duration.count());
-    printf("=== ReportCallback END ===\n\n");
 }
 
-/*Napi::Value MmsClient::EnableReporting(const Napi::CallbackInfo& info) {
+Napi::Value MmsClient::EnableReporting(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
     
     if (info.Length() < 2 || !info[0].IsString() || !info[1].IsString()) {
@@ -5838,162 +4965,6 @@ void MmsClient::ReportCallback(void* parameter, ClientReport report) {
         Napi::Error::New(env, std::string("Exception: ") + e.what()).ThrowAsJavaScriptException();
         return env.Undefined();
     }
-}*/
-
-Napi::Value MmsClient::EnableReporting(const Napi::CallbackInfo& info) {
-    Napi::Env env = info.Env();
-    
-    if (info.Length() < 2 || !info[0].IsString() || !info[1].IsString()) {
-        Napi::TypeError::New(env, "Expected rcbRef (string) and datasetRef (string)").ThrowAsJavaScriptException();
-        return env.Undefined();
-    }
-    
-    std::string rcbRef = info[0].As<Napi::String>().Utf8Value();
-    std::string datasetRef = info[1].As<Napi::String>().Utf8Value();
-    
-    // 1. Короткая блокировка – копируем connection_ и проверяем состояние
-    IedConnection localConn = nullptr;
-    bool isConnected = false;
-    bool alreadyEnabled = false;
-    {
-        std::lock_guard<std::recursive_timed_mutex> lock(connMutex_);
-        isConnected = connected_;
-        localConn = connection_;
-        if (activeReports_.find(rcbRef) != activeReports_.end()) {
-            alreadyEnabled = true;
-        }
-    }
-    if (!isConnected || !localConn) {
-        Napi::Error::New(env, "Not connected").ThrowAsJavaScriptException();
-        return env.Undefined();
-    }
-    if (alreadyEnabled) {
-        Napi::Error::New(env, "Report already enabled for " + rcbRef).ThrowAsJavaScriptException();
-        return env.Undefined();
-    }
-    
-    // 2. Длительные операции без мьютекса
-    IedClientError error;
-    
-    // Получаем директорию DataSet
-    bool isDeletable = false;
-    LinkedList dataSetDirectory = IedConnection_getDataSetDirectory(localConn, &error, datasetRef.c_str(), &isDeletable);
-    if (error != IED_ERROR_OK || !dataSetDirectory) {
-        Napi::Error::New(env, "Failed to get dataset directory: " + std::to_string(error)).ThrowAsJavaScriptException();
-        return env.Undefined();
-    }
-    
-    std::vector<std::string> dataSetMembers;
-    LinkedList entry = dataSetDirectory;
-    while (entry) {
-        if (entry->data) {
-            dataSetMembers.push_back(std::string((char*)entry->data));
-        }
-        entry = LinkedList_getNext(entry);
-    }
-    LinkedList_destroy(dataSetDirectory);
-    
-    // Читаем DataSet
-    ClientDataSet clientDataSet = IedConnection_readDataSetValues(localConn, &error, datasetRef.c_str(), nullptr);
-    if (error != IED_ERROR_OK || !clientDataSet) {
-        Napi::Error::New(env, "Failed to read dataset: " + std::to_string(error)).ThrowAsJavaScriptException();
-        return env.Undefined();
-    }
-    
-    // Получаем RCB
-    ClientReportControlBlock rcb = IedConnection_getRCBValues(localConn, &error, rcbRef.c_str(), nullptr);
-    if (error != IED_ERROR_OK || !rcb) {
-        ClientDataSet_destroy(clientDataSet);
-        Napi::Error::New(env, "Failed to get RCB: " + std::to_string(error)).ThrowAsJavaScriptException();
-        return env.Undefined();
-    }
-    
-    // 3. Сбор информации о структурах (без мьютекса)
-    //std::unordered_map<std::string, StructureInfo> tempStructCache;
-    std::unordered_map<std::string, StructureElementNames> tempStructCache;
-    for (const auto& memberRef : dataSetMembers) {
-        std::string cleanRef = memberRef;
-        FunctionalConstraint fc = IEC61850_FC_ST;
-        size_t bracketPos = memberRef.find('[');
-        if (bracketPos != std::string::npos && memberRef.back() == ']') {
-            std::string fcStr = memberRef.substr(bracketPos + 1, memberRef.length() - bracketPos - 2);
-            cleanRef = memberRef.substr(0, bracketPos);
-            fc = ParseFCFromString(fcStr);
-        }
-        CollectStructureInfo(localConn, cleanRef, fc, tempStructCache, 0);
-    }
-    
-    // 4. Настройка RCB (без мьютекса)
-    if (ClientReportControlBlock_getResv(rcb)) {
-        ClientReportControlBlock_setResv(rcb, false);
-        IedConnection_setRCBValues(localConn, &error, rcb, RCB_ELEMENT_RESV, true);
-    }
-    ClientReportControlBlock_setDataSetReference(rcb, datasetRef.c_str());
-    ClientReportControlBlock_setTrgOps(rcb, TRG_OPT_DATA_CHANGED | TRG_OPT_QUALITY_CHANGED | TRG_OPT_INTEGRITY);
-    ClientReportControlBlock_setIntgPd(rcb, 10000);
-    ClientReportControlBlock_setBufTm(rcb, 5000);
-    ClientReportControlBlock_setGI(rcb, false);
-    ClientReportControlBlock_setRptEna(rcb, true);
-    
-    uint32_t mask = RCB_ELEMENT_DATSET | RCB_ELEMENT_TRG_OPS | RCB_ELEMENT_INTG_PD;
-    IedConnection_setRCBValues(localConn, &error, rcb, mask, true);
-    if (error != IED_ERROR_OK) {
-        // Fallback: только включение отчёта
-        ClientReportControlBlock_setRptEna(rcb, false);
-        IedConnection_setRCBValues(localConn, &error, rcb, RCB_ELEMENT_RPT_ENA, true);
-        ClientReportControlBlock_setRptEna(rcb, true);
-        IedConnection_setRCBValues(localConn, &error, rcb, RCB_ELEMENT_RPT_ENA, true);
-    }
-    if (error != IED_ERROR_OK) {
-        ClientDataSet_destroy(clientDataSet);
-        ClientReportControlBlock_destroy(rcb);
-        Napi::Error::New(env, "Failed to set RCB values: " + std::to_string(error)).ThrowAsJavaScriptException();
-        return env.Undefined();
-    }
-    
-    // 5. Короткая блокировка – сохраняем всё в activeReports_ и кэш
-    {
-        std::lock_guard<std::recursive_timed_mutex> lock(connMutex_);
-        if (activeReports_.find(rcbRef) != activeReports_.end()) {
-            ClientDataSet_destroy(clientDataSet);
-            ClientReportControlBlock_destroy(rcb);
-            Napi::Error::New(env, "Report already enabled (race condition)").ThrowAsJavaScriptException();
-            return env.Undefined();
-        }
-        
-        ReportInfo reportInfo;
-        reportInfo.rcbRef = rcbRef;
-        reportInfo.datasetRef = datasetRef;
-        reportInfo.dataSetMembers = std::move(dataSetMembers);
-        reportInfo.rcb = rcb;
-        reportInfo.dataSet = clientDataSet;
-        for (auto& [ref, info] : tempStructCache) {
-            datasetCache_[datasetRef].structureCache[ref] = std::move(info);
-        }
-        activeReports_[rcbRef] = std::move(reportInfo);
-    }
-    
-    // 6. Установка обработчика отчёта
-    IedConnection_installReportHandler(localConn, rcbRef.c_str(),
-                                       ClientReportControlBlock_getRptId(rcb),
-                                       ReportCallback, this);
-    
-    // 7. Отправка события
-    tsfn_.BlockingCall([this, rcbRef, datasetRef, memberCount = (int)dataSetMembers.size()](Napi::Env env, Napi::Function jsCallback) {
-        try {
-            Napi::Object eventObj = Napi::Object::New(env);
-            eventObj.Set("clientID", Napi::String::New(env, clientID_));
-            eventObj.Set("type", "control");
-            eventObj.Set("event", "reportingEnabled");
-            eventObj.Set("rcbRef", Napi::String::New(env, rcbRef));
-            eventObj.Set("datasetRef", Napi::String::New(env, datasetRef));
-            eventObj.Set("memberCount", Napi::Number::New(env, memberCount));
-            jsCallback.Call({Napi::String::New(env, "data"), eventObj});
-        } catch (...) {}
-    });
-    
-    printf("EnableReporting: SUCCESS for %s -> %s\n", rcbRef.c_str(), datasetRef.c_str());
-    return env.Undefined();
 }
 
 Napi::Value MmsClient::DisableReporting(const Napi::CallbackInfo& info) {

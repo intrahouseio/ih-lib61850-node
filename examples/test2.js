@@ -29,8 +29,8 @@ const client = new MmsClient((event, data) => {
     }
 
     if (event === 'conn' && data.event === 'opened') {
-        logWithTime('Connection opened, starting diagnostics...');
-        runDiagnostics().catch(err => logWithTime('Diagnostics error:', err));
+        logWithTime('Connection opened, starting concurrent tasks...');
+        runConcurrentTasks().catch(err => logWithTime('Error in concurrent tasks:', err));
     }
 
     if (event === 'data' && data.type === 'error') {
@@ -44,29 +44,29 @@ const client = new MmsClient((event, data) => {
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-async function runDiagnostics() {
+async function runConcurrentTasks() {
     try {
-        // 1. Получаем модель данных
-        logWithTime('Step 1: Browsing data model...');
+        // 1. Получаем модель данных (один раз для поиска ресурсов)
+        logWithTime('Step 1: Browsing data model to find dataset and report...');
         const browseStart = now();
         const dataModel = await client.browseDataModel();
-        logWithTime(`Browse completed in ${now() - browseStart} ms`);
+        logWithTime(`Initial browse completed in ${now() - browseStart} ms`);
 
-        // Диагностический вывод структуры
-        logWithTime('Data model structure (first 2 nodes):', 
-            util.inspect(dataModel.slice(0, 2), { depth: 4, colors: true }));
-
-        // 2. Ищем подходящие DataSet и отчеты
+        // 2. Ищем подходящие DataSet и отчет
         let targetDataset = null;
         let targetReport = null;
 
-        // Сначала ищем DataSet (берём первый)
         for (const ln of dataModel) {
-            if (ln.dataSets && ln.dataSets.length > 0) {
+            if (ln.dataSets && ln.dataSets.length > 0 && !targetDataset) {
                 targetDataset = ln.dataSets[0];
                 logWithTime(`Found dataset: ${targetDataset.reference}`);
-                break;
             }
+            if (ln.reports && ln.reports.length > 0 && !targetReport) {
+                // Берем первый отчет (позже уточним, ссылается ли он на наш dataset)
+                targetReport = ln.reports[0];
+                logWithTime(`Found potential report: ${targetReport.reference}`);
+            }
+            if (targetDataset && targetReport) break;
         }
 
         if (!targetDataset) {
@@ -74,95 +74,119 @@ async function runDiagnostics() {
             return;
         }
 
-        // Теперь ищем отчёт, который ссылается на этот DataSet
-        for (const ln of dataModel) {
-            if (!ln.reports || ln.reports.length === 0) continue;
-            
-            for (const report of ln.reports) {
-                logWithTime(`Getting details for report ${report.reference}...`);
-                try {
-                    const details = await client.browseDataModel(report.reference);
-                    if (details.datasetRef === targetDataset.reference) {
-                        targetReport = details;
-                        logWithTime(`Found matching report: ${report.reference} (dataset: ${details.datasetRef})`);
-                        break;
-                    }
-                } catch (err) {
-                    logWithTime(`Error getting details for report ${report.reference}: ${err.message}`);
-                }
+        // Уточняем детали отчета (чтобы получить datasetRef)
+        let reportDetails = null;
+        if (targetReport) {
+            try {
+                reportDetails = await client.browseDataModel(targetReport.reference);
+                logWithTime(`Report details: datasetRef = ${reportDetails.datasetRef || 'none'}`);
+            } catch (err) {
+                logWithTime(`Failed to get report details: ${err.message}`);
             }
-            if (targetReport) break;
         }
 
-        // Если не нашли подходящий, возьмём любой отчёт с datasetRef
-        if (!targetReport) {
+        // Если отчет не ссылается на наш dataset, ищем другой
+        if (!reportDetails || reportDetails.datasetRef !== targetDataset.reference) {
+            logWithTime('Initial report does not match dataset, searching for matching report...');
+            let found = false;
             for (const ln of dataModel) {
-                if (!ln.reports || ln.reports.length === 0) continue;
-                for (const report of ln.reports) {
+                if (!ln.reports) continue;
+                for (const rpt of ln.reports) {
                     try {
-                        const details = await client.browseDataModel(report.reference);
-                        if (details.datasetRef) {
-                            targetReport = details;
-                            logWithTime(`Found any report with dataset: ${report.reference} (dataset: ${details.datasetRef})`);
+                        const details = await client.browseDataModel(rpt.reference);
+                        if (details.datasetRef === targetDataset.reference) {
+                            targetReport = rpt;
+                            reportDetails = details;
+                            found = true;
+                            logWithTime(`Found matching report: ${targetReport.reference} (dataset: ${details.datasetRef})`);
                             break;
                         }
                     } catch (err) {
-                        logWithTime(`Error getting details for report ${report.reference}: ${err.message}`);
+                        // ignore
                     }
                 }
-                if (targetReport) break;
+                if (found) break;
+            }
+            if (!found) {
+                logWithTime('No report matching the dataset found, will continue without reporting.');
+                targetReport = null;
             }
         }
 
-        // 3. Первичное чтение и кэширование DataSet (readDataSetModel)
+        // 3. Кэшируем DataSet (readDataSetModel)
         logWithTime(`Step 2: Caching dataset ${targetDataset.reference}...`);
         const cacheStart = now();
         await client.readDataSetModel([targetDataset.reference]);
         logWithTime(`Caching completed in ${now() - cacheStart} ms`);
 
-        // 4. Включаем отчёт, если найден
-        if (targetReport) {
-            logWithTime(`Step 3: Enabling report ${targetReport.reference} with dataset ${targetReport.datasetRef}...`);
+        // 4. Включаем отчет, если найден
+        if (targetReport && reportDetails && reportDetails.datasetRef) {
+            logWithTime(`Step 3: Enabling report ${targetReport.reference} with dataset ${reportDetails.datasetRef}...`);
             const enableStart = now();
-            await client.enableReporting(targetReport.reference, targetReport.datasetRef);
+            await client.enableReporting(targetReport.reference, reportDetails.datasetRef);
             logWithTime(`Reporting enabled in ${now() - enableStart} ms`);
         } else {
             logWithTime('No suitable report found, skipping report enabling.');
         }
 
-        // 5. Запускаем цикл поллинга (10 итераций с интервалом 2 сек)
-        logWithTime('Step 4: Starting polling loop (10 iterations, 2 sec interval)...');
-        for (let i = 0; i < 10; i++) {
-            logWithTime(`--- Poll iteration ${i+1} ---`);
+        // 5. Запускаем параллельные задачи:
+        //    - Поллинг каждые 2 секунды
+        //    - Сканирование модели каждые 5 секунд
+        //    - Основной цикл на 30 секунд
+        logWithTime('Step 4: Starting concurrent tasks (polling every 2s, browsing every 5s) for 30 seconds...');
 
-            const pollStart = now();
-            try {
-                const pollResults = await client.pollDataSetValues([targetDataset.reference]);
-                const pollEnd = now();
-                logWithTime(`Poll completed in ${pollEnd - pollStart} ms`);
+        let stop = false;
+        let pollCount = 0;
+        let browseCount = 0;
 
-                if (pollResults && pollResults[0]) {
-                    const res = pollResults[0];
-                    if (res.isValid) {
-                        logWithTime(`  Read time (µs): ${res.readTimeMicros}, Process time (µs): ${res.processTimeMicros}`);
-                        logWithTime(`  Values count: ${res.count}`);
-                        // Выводим первые 3 значения для проверки
-                        const entries = Object.entries(res.values).slice(0, 3);
-                        entries.forEach(([ref, val]) => {
-                            logWithTime(`    ${ref}: ${util.inspect(val, { depth: 2 })}`);
-                        });
+        // Задача поллинга
+        const pollTask = (async () => {
+            while (!stop) {
+                const start = now();
+                try {
+                    const results = await client.pollDataSetValues([targetDataset.reference]);
+                    const duration = now() - start;
+                    if (results && results[0]) {
+                        const res = results[0];
+                        if (res.isValid) {
+                            logWithTime(`[POLL #${++pollCount}] duration=${duration}ms, readTime=${res.readTimeMicros}µs, processTime=${res.processTimeMicros}µs, values=${res.count}`);
+                        } else {
+                            logWithTime(`[POLL #${++pollCount}] ERROR: ${res.errorReason}`);
+                        }
                     } else {
-                        logWithTime(`  Poll error: ${res.errorReason}`);
+                        logWithTime(`[POLL #${++pollCount}] no results`);
                     }
+                } catch (err) {
+                    logWithTime(`[POLL #${++pollCount}] exception: ${err.message}`);
                 }
-            } catch (err) {
-                logWithTime(`Poll exception: ${err.message}`);
+                await sleep(2000);
             }
+        })();
 
-            await sleep(2000);
-        }
+        // Задача сканирования модели
+        const browseTask = (async () => {
+            while (!stop) {
+                const start = now();
+                try {
+                    await client.browseDataModel();
+                    const duration = now() - start;
+                    logWithTime(`[BROWSE #${++browseCount}] completed in ${duration}ms`);
+                } catch (err) {
+                    logWithTime(`[BROWSE #${++browseCount}] error: ${err.message}`);
+                }
+                await sleep(5000);
+            }
+        })();
 
-        // 6. Отключаем отчёт
+        // Ждём 60 секунд
+        await sleep(60000);
+        stop = true;
+
+        // Дожидаемся завершения задач (с таймаутом)
+        await Promise.race([pollTask, browseTask]);
+        logWithTime('Concurrent tasks stopped.');
+
+        // 6. Отключаем отчет, если был включен
         if (targetReport) {
             logWithTime('Step 5: Disabling report...');
             const disableStart = now();
@@ -170,16 +194,17 @@ async function runDiagnostics() {
             logWithTime(`Report disabled in ${now() - disableStart} ms`);
         }
 
-        logWithTime('Diagnostics completed. Closing client...');
+        logWithTime('All tasks completed. Closing client...');
         await client.close();
         logWithTime('Client closed.');
 
     } catch (err) {
-        logWithTime(`Fatal error in diagnostics: ${err.stack}`);
+        logWithTime(`Fatal error: ${err.stack}`);
+        await client.close().catch(e => logWithTime(`Close error: ${e.message}`));
     }
 }
 
-// Подключаемся к устройству (без .catch, так как connect не возвращает Promise)
+// Подключение
 logWithTime('Starting client...');
 try {
     client.connect({

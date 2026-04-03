@@ -596,22 +596,17 @@ async function exploreModel() {
             });
             
             // Выбираем первый DataSet для кэширования
+            // Выбираем первый DataSet для кэширования
             if (lln0Details.dataSets.length > 0) {
                 const firstDataSet = lln0Details.dataSets[0];
                 console.log(`\n=== 3. Кэшируем DataSet ${firstDataSet.reference} ===`);
-                const dsDetails = await client.browseDataModel(firstDataSet.reference);
                 
-                console.log(`\nDataSet ${dsDetails.reference}:`);
-                console.log(`  Удаляемый: ${dsDetails.isDeletable}`);
-                console.log(`  Членов: ${dsDetails.memberCount}`);
-                console.log('\n  Все члены:');
-                dsDetails.members.forEach((member, index) => {
-                    console.log(`  ${index + 1}. ${member.reference}`);
-                });
+                // ✅ ПРАВИЛЬНО: вызываем readDataSetModel для заполнения кэша структур
+                await client.readDataSetModel([firstDataSet.reference]);
                 
-                // Теперь можем быстро читать этот DataSet
+                // Теперь можно быстро читать этот DataSet
                 console.log('\n=== 4. Быстрое чтение DataSet ===');
-                const pollResults = await client.pollDataSetValues([firstDataSet.reference]);
+                const pollResults = await client.pollDataSetValues([firstDataSet.reference]);         
                 
                 console.log('\nPoll results:');
                 pollResults.forEach((result, idx) => {

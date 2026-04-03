@@ -33,12 +33,13 @@ public:
     static Napi::Object Init(Napi::Env env, Napi::Object exports);
     MmsClient(const Napi::CallbackInfo& info);
     ~MmsClient(); 
-    std::recursive_mutex& GetMutex() { return connMutex_; }   
+    std::recursive_timed_mutex& GetMutex() { return connMutex_; }   
 
     // флаг для управления соединением
     bool connectionClosingIntentionally_ = false;
 
-
+    bool IsConnected() const { return connected_; }
+    bool IsClosing() const { return isClosing_; }
 
     struct ReportInfo {
         ClientReportControlBlock rcb = nullptr;
@@ -169,7 +170,8 @@ private:
 
     IedConnection connection_;
     std::thread thread_;
-    std::recursive_mutex connMutex_;
+    std::recursive_timed_mutex connMutex_;  
+    //std::recursive_mutex connMutex_;
     Napi::ThreadSafeFunction tsfn_;
     bool running_;
     bool connected_;
