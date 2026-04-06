@@ -837,7 +837,7 @@ namespace {
 
                         arr.Set(i, obj);
                     }
-                    deferred_.Resolve(arr);
+                    deferred_.Resolve(arr); 
                     break;
                 }
 

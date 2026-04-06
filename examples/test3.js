@@ -8,6 +8,7 @@ const client = new MmsClient((event, data) => {
     }
 });
 
+
 async function browseModel() {
     try {
         const model = await client.browseDataModel();
