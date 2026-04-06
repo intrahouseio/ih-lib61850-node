@@ -36,16 +36,12 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
 
       - name: Create Release
-        id: create_release
-        uses: softprops/action-gh-release@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        uses: ncipollo/release-action@v1
         with:
-          tag_name: v${{ steps.package-version.outputs.version }}
+          tag: v${{ steps.package-version.outputs.version }}
           name: Release v${{ steps.package-version.outputs.version }}
-          draft: false
-          prerelease: false
-          generate_release_notes: false
+          generateReleaseNotes: true
+          token: ${{ secrets.RELEASE_TOKEN }}
 
   build-and-upload:
     needs: create-release
