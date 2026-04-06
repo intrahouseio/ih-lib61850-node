@@ -1,5 +1,5 @@
 {
-  "name": "@amigo9090/ih-libiec61850-node",
+  "name": "@amigo909090/ih-libiec61850-node",
   "version": "1.0.56",
   "description": "Node.js addon for IEC 61850 client (MMS, GOOSE) using libiec61850",
   "main": "index.js",
@@ -15,7 +15,7 @@
     "addon",
     "cross-platform"
   ],
-  "author": "Amigo9090",
+  "author": "Amigo909090",
   "license": "MIT",
   "files": [
     "index.js",
@@ -43,15 +43,15 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/intrahouseio/ih-lib61850-node.git"
+    "url": "git+https://github.com/Amigo909090/ih-lib61850-node.git"
   },
-  "homepage": "https://github.com/intrahouseio/ih-lib61850-node#readme",
+  "homepage": "https://github.com/Amigo909090/ih-lib61850-node#readme",
   "directories": {
     "example": "examples",
     "lib": "lib"
   },
   "gypfile": true,
   "bugs": {
-    "url": "https://github.com/intrahouseio/ih-lib61850-node/issues"
+    "url": "https://github.com/Amigo909090/ih-lib61850-node/issues"
   }
 }
