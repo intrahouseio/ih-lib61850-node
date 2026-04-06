@@ -6,7 +6,7 @@
   "scripts": {
     "configure": "node-gyp configure",
     "build": "node-gyp build",
-    "prebuild": "prebuild --target=20.19.0 --napi --tag node-v128",
+    "prebuild": "prebuild --target=20 --napi --tag node-v128",
     "prebuild-upload": "prebuild --upload-all",
     "install": "node-gyp rebuild"
   },
@@ -26,7 +26,7 @@
     "node-addon-api": "^7.0.0"
   },
   "devDependencies": {
-    "prebuild": "12.1.0",
+    "prebuild": "^13.0.0",
     "node-gyp": "^10.1.0",
     "node-addon-api": "^7.1.1"
   },
@@ -43,15 +43,15 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/intrahouseio/ih-lib61850-node.git"
+    "url": "git+https://github.com/Amigo909090/ih-lib61850-node.git"
   },
-  "homepage": "https://github.com/intrahouseio/ih-lib61850-node#readme",
+  "homepage": "https://github.com/Amigo909090/ih-lib61850-node#readme",
   "directories": {
     "example": "examples",
     "lib": "lib"
   },
   "gypfile": true,
   "bugs": {
-    "url": "https://github.com/intrahouseio/ih-lib61850-node/issues"
+    "url": "https://github.com/Amigo909090/ih-lib61850-node/issues"
   }
 }
