@@ -1,4 +1,3 @@
----
 name: Build and Publish
 
 on:
@@ -6,7 +5,6 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
-  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -23,12 +21,11 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '20.19.0'
 
       - name: Get package version
         id: package-version
-        run: |
-          echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
+        run: echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
         shell: bash
 
       - name: Delete existing release
@@ -40,7 +37,7 @@ jobs:
 
       - name: Create Release
         id: create_release
-        uses: softprops/action-gh-release@v2.3.2
+        uses: softprops/action-gh-release@v2
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
         with:
@@ -78,7 +75,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '20.19.0'
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -95,8 +92,7 @@ jobs:
         if: matrix.os == 'ubuntu-22.04' && (matrix.arch == 'arm' || matrix.arch == 'arm64')
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf \
-            libc6-dev-armhf-cross
+          sudo apt-get install -y gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf libc6-dev-armhf-cross
           sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
         shell: bash
 
@@ -129,36 +125,34 @@ jobs:
         run: npm run configure
         shell: pwsh
 
-      - name: Prebuild binaries for Node.js 22 (Unix)
+      - name: Prebuild binaries for Node.js 20 (Unix)
         if: matrix.os != 'windows-latest'
         run: |
           if [ "${{ matrix.os }}" == "macos-latest" ] && [ "${{ matrix.arch }}" == "x64" ]; then
-            arch -x86_64 npm run prebuild -- --arch x64 --macos-min-version=11.0
+            arch -x86_64 npm run prebuild -- --target 20.19.0 --arch x64 --macos-min-version=11.0
           elif [ "${{ matrix.os }}" == "ubuntu-22.04" ] && [ "${{ matrix.arch }}" == "arm" ]; then
             export CC=arm-linux-gnueabihf-gcc
             export CXX=arm-linux-gnueabihf-g++
             export LINK=arm-linux-gnueabihf-g++
-            npm run prebuild -- --arch arm \
-              --cflags="-march=armv7-a -mfpu=vfp -mfloat-abi=hard"
+            npm run prebuild -- --target 20.19.0 --arch arm --cflags="-march=armv7-a -mfpu=vfp -mfloat-abi=hard"
           elif [ "${{ matrix.os }}" == "ubuntu-22.04" ] && [ "${{ matrix.arch }}" == "arm64" ]; then
             export CC=aarch64-linux-gnu-gcc
             export CXX=aarch64-linux-gnu-g++
             export LINK=aarch64-linux-gnu-g++
-            npm run prebuild -- --arch arm64
+            npm run prebuild -- --target 20.19.0 --arch arm64
           else
-            npm run prebuild -- --arch ${{ matrix.arch }}
+            npm run prebuild -- --target 20.19.0 --arch ${{ matrix.arch }}
           fi
         shell: bash
 
-      - name: Prebuild binaries for Node.js 22 (Windows)
+      - name: Prebuild binaries for Node.js 20 (Windows)
         if: matrix.os == 'windows-latest'
-        run: npm run prebuild -- --arch x64
+        run: npm run prebuild -- --target 20.19.0 --arch x64
         shell: pwsh
 
       - name: Get package version
         id: package-version
-        run: |
-          echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
+        run: echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
         shell: bash
 
       - name: Get prebuild file
@@ -174,7 +168,7 @@ jobs:
         shell: bash
 
       - name: Upload prebuilt binaries to GitHub Releases
-        uses: softprops/action-gh-release@v2.3.2
+        uses: softprops/action-gh-release@v2
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
         with:
@@ -200,7 +194,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '20.19.0'
           registry-url: 'https://registry.npmjs.org'
 
       - name: Install semver
@@ -214,8 +208,7 @@ jobs:
 
       - name: Get package version
         id: package-version
-        run: |
-          echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
+        run: echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
         shell: bash
 
       - name: Download all artifacts
@@ -287,8 +280,7 @@ jobs:
       - name: Copy iec61850.dll for Windows
         run: |
           mkdir -p builds/windows_x64
-          cp lib/build/iec61850.dll builds/windows_x64/iec61850.dll || \
-            echo "Warning: iec61850.dll not found in lib/build/"
+          cp lib/build/iec61850.dll builds/windows_x64/iec61850.dll || echo "Warning: iec61850.dll not found in lib/build/"
 
       - name: Verify builds folder
         run: |
@@ -322,7 +314,7 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          LATEST_VERSION=$(npm view @amigo909090/ih-libiec61850-node version 2>/dev/null || echo "0.0.0")
+          LATEST_VERSION=$(npm view @amigo9090/ih-libiec61850-node version 2>/dev/null || echo "0.0.0")
           CURRENT_VERSION=$(node -p "require('./package.json').version")
 
           if [ "$CURRENT_VERSION" = "$LATEST_VERSION" ]; then
@@ -338,11 +330,11 @@ jobs:
           jq 'del(.scripts) | del(.devDependencies)' package.json > package_npm.json
           mv package_npm.json package.json
 
-          if npm view @amigo909090/ih-libiec61850-node@$NEW_VERSION version > /dev/null 2>&1; then
+          if npm view @amigo9090/ih-libiec61850-node@$NEW_VERSION version > /dev/null 2>&1; then
             echo "Version $NEW_VERSION already exists in npm. Skipping publish."
           else
             npm publish --access public
-            echo "Published @amigo909090/ih-libiec61850-node@$NEW_VERSION"
+            echo "Published @amigo9090/ih-libiec61850-node@$NEW_VERSION"
           fi
 
           git tag v$NEW_VERSION
