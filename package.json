@@ -6,8 +6,7 @@
   "scripts": {
     "configure": "node-gyp configure",
     "build": "node-gyp build",
-    "prebuild": "prebuild --target=20 --napi --tag node-v128",
-    "prebuild-upload": "prebuild --upload-all",
+    "prebuildify": "prebuildify --napi --target=20 --tag node-v128",
     "install": "node-gyp rebuild"
   },
   "keywords": [
@@ -26,7 +25,7 @@
     "node-addon-api": "^7.0.0"
   },
   "devDependencies": {
-    "prebuild": "^13.0.0",
+    "prebuildify": "^6.0.1",
     "node-gyp": "^10.1.0",
     "node-addon-api": "^7.1.1"
   },
