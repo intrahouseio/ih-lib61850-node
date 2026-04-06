@@ -23,7 +23,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '24'
+          node-version: '20.19.0'
 
       - name: Get package version
         id: package-version
@@ -39,7 +39,7 @@ jobs:
 
       - name: Create Release
         id: create_release
-        uses: softprops/action-gh-release@v2.3.2
+        uses: softprops/action-gh-release@v2
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
         with:
@@ -77,7 +77,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '24'
+          node-version: '20.19.0'
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -127,29 +127,29 @@ jobs:
         run: npm run configure
         shell: pwsh
 
-      - name: Prebuild binaries for Node.js 24 (Unix)
+      - name: Prebuild binaries for Node.js 20 (Unix)
         if: matrix.os != 'windows-latest'
         run: |
           if [ "${{ matrix.os }}" == "macos-latest" ] && [ "${{ matrix.arch }}" == "x64" ]; then
-            arch -x86_64 npm run prebuild -- --target 24 --arch x64 --macos-min-version=11.0
+            arch -x86_64 npm run prebuild -- --target 20.19.0 --arch x64 --macos-min-version=11.0
           elif [ "${{ matrix.os }}" == "ubuntu-22.04" ] && [ "${{ matrix.arch }}" == "arm" ]; then
             export CC=arm-linux-gnueabihf-gcc
             export CXX=arm-linux-gnueabihf-g++
             export LINK=arm-linux-gnueabihf-g++
-            npm run prebuild -- --target 24 --arch arm --cflags="-march=armv7-a -mfpu=vfp -mfloat-abi=hard"
+            npm run prebuild -- --target 20.19.0 --arch arm --cflags="-march=armv7-a -mfpu=vfp -mfloat-abi=hard"
           elif [ "${{ matrix.os }}" == "ubuntu-22.04" ] && [ "${{ matrix.arch }}" == "arm64" ]; then
             export CC=aarch64-linux-gnu-gcc
             export CXX=aarch64-linux-gnu-g++
             export LINK=aarch64-linux-gnu-g++
-            npm run prebuild -- --target 24 --arch arm64
+            npm run prebuild -- --target 20.19.0 --arch arm64
           else
-            npm run prebuild -- --target 24 --arch ${{ matrix.arch }}
+            npm run prebuild -- --target 20.19.0 --arch ${{ matrix.arch }}
           fi
         shell: bash
 
-      - name: Prebuild binaries for Node.js 24 (Windows)
+      - name: Prebuild binaries for Node.js 20 (Windows)
         if: matrix.os == 'windows-latest'
-        run: npm run prebuild -- --target 24 --arch x64
+        run: npm run prebuild -- --target 20.19.0 --arch x64
         shell: pwsh
 
       - name: Get package version
@@ -170,7 +170,7 @@ jobs:
         shell: bash
 
       - name: Upload prebuilt binaries to GitHub Releases
-        uses: softprops/action-gh-release@v2.3.2
+        uses: softprops/action-gh-release@v2
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
         with:
@@ -196,7 +196,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '24'
+          node-version: '20.19.0'
           registry-url: 'https://registry.npmjs.org'
 
       - name: Install semver
