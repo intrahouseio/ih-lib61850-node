@@ -6,7 +6,7 @@
   "scripts": {
     "configure": "node-gyp configure",
     "build": "node-gyp build",
-    "prebuild": "prebuild --target=24 --napi --tag node-v128",
+    "prebuild": "prebuild --target=22 --napi --tag node-v128",
     "prebuild-upload": "prebuild --upload-all",
     "install": "node-gyp rebuild"
   },
