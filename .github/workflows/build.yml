@@ -133,26 +133,26 @@ jobs:
         if: matrix.os != 'windows-latest'
         run: |
           if [ "${{ matrix.os }}" == "macos-latest" ] && [ "${{ matrix.arch }}" == "x64" ]; then
-            arch -x86_64 npm run prebuild -- --target 22 --arch x64 --macos-min-version=11.0
+            arch -x86_64 npm run prebuild -- --arch x64 --macos-min-version=11.0
           elif [ "${{ matrix.os }}" == "ubuntu-22.04" ] && [ "${{ matrix.arch }}" == "arm" ]; then
             export CC=arm-linux-gnueabihf-gcc
             export CXX=arm-linux-gnueabihf-g++
             export LINK=arm-linux-gnueabihf-g++
-            npm run prebuild -- --target 22 --arch arm \
+            npm run prebuild -- --arch arm \
               --cflags="-march=armv7-a -mfpu=vfp -mfloat-abi=hard"
           elif [ "${{ matrix.os }}" == "ubuntu-22.04" ] && [ "${{ matrix.arch }}" == "arm64" ]; then
             export CC=aarch64-linux-gnu-gcc
             export CXX=aarch64-linux-gnu-g++
             export LINK=aarch64-linux-gnu-g++
-            npm run prebuild -- --target 22 --arch arm64
+            npm run prebuild -- --arch arm64
           else
-            npm run prebuild -- --target 22 --arch ${{ matrix.arch }}
+            npm run prebuild -- --arch ${{ matrix.arch }}
           fi
         shell: bash
 
       - name: Prebuild binaries for Node.js 22 (Windows)
         if: matrix.os == 'windows-latest'
-        run: npm run prebuild -- --target 22 --arch x64
+        run: npm run prebuild -- --arch x64
         shell: pwsh
 
       - name: Get package version
@@ -163,7 +163,7 @@ jobs:
 
       - name: Get prebuild file
         id: get-prebuild
-        run: |          
+        run: |
           FILE=$(ls prebuilds/@amigo909090/ih-libiec61850-node-v${{ steps.package-version.outputs.version }}-node-v*.tar.gz 2>/dev/null | head -n 1 || echo "")
           if [ -z "$FILE" ]; then
             echo "ERROR: No prebuild tar.gz found!" >&2
@@ -321,7 +321,7 @@ jobs:
       - name: Publish to npm
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |          
+        run: |
           LATEST_VERSION=$(npm view @amigo909090/ih-libiec61850-node version 2>/dev/null || echo "0.0.0")
           CURRENT_VERSION=$(node -p "require('./package.json').version")
 
