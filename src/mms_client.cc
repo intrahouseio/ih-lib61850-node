@@ -766,6 +766,7 @@ namespace {
                 return;
             }
 
+
             if (ref_.empty()) {
                 result_.type = BrowseResult::ROOT_NODES;
                 result_.rootNodes = GetRootNodesWorker(localConn);
