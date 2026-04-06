@@ -164,12 +164,15 @@ jobs:
         shell: bash
 
       - name: Upload prebuilt binaries to GitHub Releases
-        uses: softprops/action-gh-release@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        uses: ncipollo/release-action@v1
         with:
-          tag_name: v${{ steps.package-version.outputs.version }}
-          files: ${{ steps.get-prebuild.outputs.file }}
+          tag: v${{ steps.package-version.outputs.version }}
+          artifacts: ${{ steps.get-prebuild.outputs.file }}
+          token: ${{ secrets.RELEASE_TOKEN }}
+          allowUpdates: true
+          omitBody: true
+          omitName: true
+          replacesArtifacts: true
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
