@@ -154,7 +154,7 @@ jobs:
       - name: Get prebuild file
         id: get-prebuild
         run: |
-          FILE=$(ls prebuilds/@amigo909090/ih-libiec61850-node-v${{ steps.package-version.outputs.version }}-node-v*.tar.gz 2>/dev/null | head -n 1 || echo "")
+          FILE=$(ls prebuilds/@amigo9090/ih-libiec61850-node-v${{ steps.package-version.outputs.version }}-node-v*.tar.gz 2>/dev/null | head -n 1 || echo "")
           if [ -z "$FILE" ]; then
             echo "ERROR: No prebuild tar.gz found!" >&2
             exit 1
@@ -304,7 +304,7 @@ jobs:
             echo "No changes in builds/ — skipping commit"
           else
             git commit -m "Update builds for release v${{ steps.package-version.outputs.version }}"
-            git push https://x-access-token:${{ secrets.RELEASE_TOKEN }}@github.com/Amigo909090/ih-lib61850-node.git main
+            git push origin main
             echo "Pushed updated builds"
           fi
 
@@ -312,7 +312,7 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          LATEST_VERSION=$(npm view @amigo909090/ih-libiec61850-node version 2>/dev/null || echo "0.0.0")
+          LATEST_VERSION=$(npm view @amigo9090/ih-libiec61850-node version 2>/dev/null || echo "0.0.0")
           CURRENT_VERSION=$(node -p "require('./package.json').version")
 
           if [ "$CURRENT_VERSION" = "$LATEST_VERSION" ]; then
@@ -328,11 +328,11 @@ jobs:
           jq 'del(.scripts) | del(.devDependencies)' package.json > package_npm.json
           mv package_npm.json package.json
 
-          if npm view @amigo909090/ih-libiec61850-node@$NEW_VERSION version > /dev/null 2>&1; then
+          if npm view @amigo9090/ih-libiec61850-node@$NEW_VERSION version > /dev/null 2>&1; then
             echo "Version $NEW_VERSION already exists in npm. Skipping publish."
           else
             npm publish --access public
-            echo "Published @amigo909090/ih-libiec61850-node@$NEW_VERSION"
+            echo "Published @amigo9090/ih-libiec61850-node@$NEW_VERSION"
           fi
 
           git tag v$NEW_VERSION
