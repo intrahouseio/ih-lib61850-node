@@ -12,7 +12,6 @@
 #include <atomic>
 //#include <sys/resource.h>
 
-
 static Napi::Value ProcessStructureWithCache(Napi::Env env, MmsClient* client,
                                             const std::string& fullRef, 
                                             MmsValue* structVal,
