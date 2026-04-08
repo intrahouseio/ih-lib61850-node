@@ -314,47 +314,19 @@ jobs:
           LATEST_VERSION=$(npm view @amigo9090/ih-libiec61850-node version 2>/dev/null || echo "0.0.0")
           NEW_VERSION=$(npx semver -i patch $LATEST_VERSION)
           echo "New version: $NEW_VERSION"
+
           npm version $NEW_VERSION --no-git-tag-version
           git add package.json package-lock.json
           git commit -m "Bump version to $NEW_VERSION"
           git push origin main
+
           jq 'del(.scripts) | del(.devDependencies)' package.json > package_npm.json
           mv package_npm.json package.json
+
           npm publish --access public
-          git tag v$NEW_VERSION
-          git push origin v$NEW_VERSION
+          echo "Published @amigo9090/ih-libiec61850-node@$NEW_VERSION"
+
+          git tag "v$NEW_VERSION"
+          git push origin "v$NEW_VERSION"
+
           git checkout -- package.json
-              env:
-                NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-              run: |
-                LATEST_VERSION=$(npm view @amigo9090/ih-libiec61850-node version 2>/dev/null || echo "0.0.0")
-                CURRENT_VERSION=$(node -p "require('./package.json').version")
-
-                if [ "$CURRENT_VERSION" = "$LATEST_VERSION" ]; then
-                  NEW_VERSION=$(npx semver -i patch $LATEST_VERSION)
-                  npm version $NEW_VERSION --no-git-tag-version
-                  git add package.json package-lock.json
-                  git commit -m "Bump version to $NEW_VERSION"
-                  git push origin main
-                else
-                  NEW_VERSION=$CURRENT_VERSION
-                fi
-
-                jq 'del(.scripts) | del(.devDependencies)' package.json > package_npm.json
-                mv package_npm.json package.json
-
-                if npm view @amigo9090/ih-libiec61850-node@$NEW_VERSION version > /dev/null 2>&1; then
-                  echo "Version $NEW_VERSION already exists in npm. Skipping publish."
-                else
-                  npm publish --access public
-                  echo "Published @amigo9090/ih-libiec61850-node@$NEW_VERSION"
-                fi
-
-                if git rev-parse "v$NEW_VERSION" >/dev/null 2>&1; then
-                  echo "Tag v$NEW_VERSION already exists, skipping tag creation"
-                else
-                  git tag v$NEW_VERSION
-                  git push origin v$NEW_VERSION
-                fi
-
-                git checkout -- package.json
