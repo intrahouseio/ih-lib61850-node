@@ -13,6 +13,7 @@
 //#include <sys/resource.h>
 
 
+
 static Napi::Value ProcessStructureWithCache(Napi::Env env, MmsClient* client,
                                             const std::string& fullRef, 
                                             MmsValue* structVal,
@@ -50,6 +51,8 @@ struct ElementInfo {
     FunctionalConstraint fc;
 };
 
+
+
 static std::string FunctionalConstraintToString(FunctionalConstraint fc) {
     switch (fc) {
         case IEC61850_FC_ST: return "ST";
@@ -74,8 +77,74 @@ static std::string FunctionalConstraintToString(FunctionalConstraint fc) {
     }
 }
 
+
+
 namespace {
+    // Преобразование MmsType в строку
+    static std::string MmsTypeToString(MmsType type) {
+        switch (type) {
+            case MMS_ARRAY:           return "Array";
+            case MMS_BOOLEAN:         return "Boolean";
+            case MMS_BIT_STRING:      return "BitString";
+            case MMS_FLOAT:           return "Float";
+            case MMS_INTEGER:         return "Integer";
+            case MMS_UNSIGNED:        return "Unsigned";
+            case MMS_STRUCTURE:       return "Structure";
+            case MMS_VISIBLE_STRING:  return "VisibleString";
+            case MMS_UTC_TIME:        return "UtcTime";
+            case MMS_OCTET_STRING:    return "OctetString";
+            default:                  return "Unknown";
+        }
+    }
+
+    // Определение CDC по ссылке DataObject (через спецификацию stVal или mag)
+    static std::string GetCdcForDataObject(IedConnection connection, const std::string& doRef) {
+        IedClientError error;
+        // Пробуем прочитать stVal (для DPC, SPS, DPS)
+        std::string stValRef = doRef + ".stVal";
+        MmsVariableSpecification* spec = IedConnection_getVariableSpecification(connection, &error, stValRef.c_str(), IEC61850_FC_ST);
+        if (error == IED_ERROR_OK && spec) {
+            MmsType type = static_cast<MmsType>(MmsVariableSpecification_getType(spec));
+            MmsVariableSpecification_destroy(spec);
+            if (type == MMS_BIT_STRING && MmsVariableSpecification_getSize(spec) == 2) return "DPC";
+            if (type == MMS_BIT_STRING && MmsVariableSpecification_getSize(spec) == 1) return "SPS";
+            if (type == MMS_INTEGER) return "INS";
+            if (type == MMS_STRUCTURE) return "ACT";
+        }
+        // Пробуем mag (для MV)
+        std::string magRef = doRef + ".mag";
+        spec = IedConnection_getVariableSpecification(connection, &error, magRef.c_str(), IEC61850_FC_MX);
+        if (error == IED_ERROR_OK && spec) {
+            MmsType type = static_cast<MmsType>(MmsVariableSpecification_getType(spec));
+            MmsVariableSpecification_destroy(spec);
+            if (type == MMS_STRUCTURE) return "MV";
+        }
+        // Пробуем namPlt (LPL)
+        std::string namPltRef = doRef + ".namPlt";
+        spec = IedConnection_getVariableSpecification(connection, &error, namPltRef.c_str(), IEC61850_FC_DC);
+        if (error == IED_ERROR_OK && spec) {
+            MmsVariableSpecification_destroy(spec);
+            return "LPL";
+        }
+        // По умолчанию – неизвестно
+        return "Unknown";
+    }
+
     // Структуры для хранения результатов обхода модели (используются в BrowseDataModelWorker)
+
+    struct DataAttributeInfo {
+        std::string name;
+        std::string reference;
+        std::string type;               // "dataAttribute"
+        std::string mmsType;            // строковое представление MMS типа
+        std::string functionalConstraint;
+    };
+
+    struct DataObjectDetails {
+        std::string reference;
+        std::string name;
+        std::vector<DataAttributeInfo> attributes;
+    };
 
     struct DataSetInfo {
         std::string name;
@@ -112,13 +181,7 @@ namespace {
         std::vector<DataSetInfo> dataSets;
         int dataObjectsCount;
         int dataSetsCount;
-    };
-
-    struct DataObjectDetails {
-        std::string reference;
-        std::string name;
-        // Пока оставим пустым, можно добавить атрибуты в будущем
-    };
+    }; 
 
     struct DataSetDetails {
         std::string reference;
@@ -159,6 +222,30 @@ namespace {
         DataSetDetails dataSet;
         ReportDetails report;
     };
+
+    //вспомогательную функцию для определения FC по имени атрибута
+    static std::string GetFunctionalConstraintForAttribute(const std::string& attrName) {
+        // CF – configuration
+        if (attrName == "ctlModel" || attrName == "cfgModel" || attrName == "d" || attrName == "dU" ||
+            attrName == "dataNs" || attrName == "operTimeout" || attrName == "blkEna" || attrName == "numCtl" ||
+            attrName == "min" || attrName == "max" || attrName == "step" || attrName == "unit")
+            return "CF";
+        // CO – control
+        if (attrName == "Oper" || attrName == "SBO" || attrName == "SBOw" || attrName == "Cancel")
+            return "CO";
+        // ST – status
+        if (attrName == "stVal" || attrName == "q" || attrName == "t")
+            return "ST";
+        // MX – measurement
+        if (attrName == "mag" || attrName == "range" || attrName == "db" || 
+            attrName == "zeroDb" || attrName == "sVC")
+            return "MX";
+        // DC – description
+        if (attrName == "namPlt" || attrName == "phyNam" || attrName == "configRev" || 
+            attrName == "ldNs" || attrName == "lnNs")
+            return "DC";
+        return "unknown";
+    }
 
     // Получить список логических устройств и узлов (только имена, без подробностей)
     static std::vector<LogicalNodeInfo> GetRootNodesWorker(IedConnection connection) {
@@ -752,20 +839,19 @@ namespace {
 
         ~BrowseDataModelWorker() {}
 
-      void Execute() override {
+        void Execute() override {
             IedConnection localConn = nullptr;
             bool isConnected = false;
             {
                 std::lock_guard<std::recursive_timed_mutex> lock(connMutex_);
-                isConnected = client_->IsConnected();        // используем геттер
-                localConn = client_->GetConnection();        // используем геттер
+                isConnected = client_->IsConnected();
+                localConn = client_->GetConnection();
             }
             if (!isConnected || !localConn) {
                 result_.type = BrowseResult::ERROR;
                 result_.errorReason = "Not connected";
                 return;
             }
-
 
             if (ref_.empty()) {
                 result_.type = BrowseResult::ROOT_NODES;
@@ -795,6 +881,46 @@ namespace {
                             result_.dataObject.name = ref_.substr(lastDot + 1);
                         else
                             result_.dataObject.name = ref_;
+
+                        // Получаем атрибуты DataObject
+                        IedClientError attrError;
+                        LinkedList attrList = IedConnection_getDataDirectory(localConn, &attrError, ref_.c_str());
+                        if (attrError == IED_ERROR_OK && attrList) {
+                            LinkedList entry = attrList;
+                            while (entry) {
+                                if (entry->data) {
+                                    char* attrName = (char*)entry->data;
+                                    std::string attrRef = ref_ + "." + attrName;
+                                    DataAttributeInfo attr;
+                                    attr.name = attrName;
+                                    attr.reference = attrRef;
+                                    attr.type = "dataAttribute";
+                                    attr.functionalConstraint = GetFunctionalConstraintForAttribute(attrName);
+
+                                    // Получаем MMS тип атрибута
+                                    IedClientError specError;
+                                    FunctionalConstraint fc = IEC61850_FC_ST;
+                                    if (attr.functionalConstraint == "CF") fc = IEC61850_FC_CF;
+                                    else if (attr.functionalConstraint == "CO") fc = IEC61850_FC_CO;
+                                    else if (attr.functionalConstraint == "DC") fc = IEC61850_FC_DC;
+                                    else if (attr.functionalConstraint == "MX") fc = IEC61850_FC_MX;
+
+                                    MmsVariableSpecification* spec = IedConnection_getVariableSpecification(
+                                        localConn, &specError, attrRef.c_str(), fc);
+                                    if (specError == IED_ERROR_OK && spec) {
+                                        MmsType mmsType = static_cast<MmsType>(MmsVariableSpecification_getType(spec));
+                                        attr.mmsType = MmsTypeToString(mmsType);
+                                        MmsVariableSpecification_destroy(spec);
+                                    } else {
+                                        attr.mmsType = "unknown";
+                                    }
+
+                                    result_.dataObject.attributes.push_back(attr);
+                                }
+                                entry = LinkedList_getNext(entry);
+                            }
+                            LinkedList_destroy(attrList);
+                        }
                     }
                 }
             }
@@ -802,8 +928,6 @@ namespace {
 
         void OnOK() override {
             Napi::Env env = env_;
-            Napi::Object resultObj = Napi::Object::New(env);
-
             switch (result_.type) {
                 case BrowseResult::ROOT_NODES: {
                     Napi::Array arr = Napi::Array::New(env, result_.rootNodes.size());
@@ -812,7 +936,6 @@ namespace {
                         Napi::Object obj = Napi::Object::New(env);
                         obj.Set("name", Napi::String::New(env, ln.name));
                         obj.Set("reference", Napi::String::New(env, ln.reference));
-                        // Добавляем поле "type" для логического узла
                         obj.Set("type", Napi::String::New(env, "logicalNode"));
 
                         Napi::Array dsArr = Napi::Array::New(env, ln.dataSets.size());
@@ -835,54 +958,42 @@ namespace {
                             rptArr.Set(j, rptObj);
                         }
                         obj.Set("reports", rptArr);
-
                         arr.Set(i, obj);
                     }
-                    deferred_.Resolve(arr); 
+                    deferred_.Resolve(arr);
                     break;
                 }
 
                 case BrowseResult::LOGICAL_NODE: {
                     const auto& ln = result_.logicalNode;
-                    Napi::Object obj = Napi::Object::New(env);
-                    obj.Set("type", Napi::String::New(env, "logicalNode")); // уже было
-                    obj.Set("reference", Napi::String::New(env, ln.reference));
-                    obj.Set("name", Napi::String::New(env, ln.name));
-
-                    Napi::Array doArr = Napi::Array::New(env, ln.dataObjects.size());
+                    Napi::Array resultArray = Napi::Array::New(env, ln.dataObjects.size());
                     for (size_t i = 0; i < ln.dataObjects.size(); ++i) {
-                        Napi::Object doObj = Napi::Object::New(env);
-                        doObj.Set("name", Napi::String::New(env, ln.dataObjects[i].name));
-                        doObj.Set("reference", Napi::String::New(env, ln.dataObjects[i].reference));
-                        doObj.Set("type", Napi::String::New(env, "dataObject"));
-                        doObj.Set("cdc", Napi::String::New(env, ln.dataObjects[i].cdc));
-                        doArr.Set(i, doObj);
+                        const auto& dobj = ln.dataObjects[i];
+                        Napi::Object obj = Napi::Object::New(env);
+                        obj.Set("name", Napi::String::New(env, dobj.name));
+                        obj.Set("reference", Napi::String::New(env, dobj.reference));
+                        obj.Set("type", Napi::String::New(env, "dataObject"));
+                        //obj.Set("cdc", Napi::String::New(env, dobj.cdc));
+                        resultArray.Set(i, obj);
                     }
-                    obj.Set("dataObjects", doArr);
-                    obj.Set("dataObjectsCount", Napi::Number::New(env, ln.dataObjectsCount));
-
-                    Napi::Array dsArr = Napi::Array::New(env, ln.dataSets.size());
-                    for (size_t i = 0; i < ln.dataSets.size(); ++i) {
-                        Napi::Object dsObj = Napi::Object::New(env);
-                        dsObj.Set("name", Napi::String::New(env, ln.dataSets[i].name));
-                        dsObj.Set("reference", Napi::String::New(env, ln.dataSets[i].reference));
-                        dsObj.Set("type", Napi::String::New(env, ln.dataSets[i].type));
-                        dsArr.Set(i, dsObj);
-                    }
-                    obj.Set("dataSets", dsArr);
-                    obj.Set("dataSetsCount", Napi::Number::New(env, ln.dataSetsCount));
-
-                    deferred_.Resolve(obj);
+                    deferred_.Resolve(resultArray);
                     break;
                 }
 
                 case BrowseResult::DATA_OBJECT: {
                     const auto& dobj = result_.dataObject;
-                    Napi::Object obj = Napi::Object::New(env);
-                    obj.Set("type", Napi::String::New(env, "dataObject"));
-                    obj.Set("reference", Napi::String::New(env, dobj.reference));
-                    obj.Set("name", Napi::String::New(env, dobj.name));
-                    deferred_.Resolve(obj);
+                    Napi::Array resultArray = Napi::Array::New(env, dobj.attributes.size());
+                    for (size_t i = 0; i < dobj.attributes.size(); ++i) {
+                        const auto& attr = dobj.attributes[i];
+                        Napi::Object obj = Napi::Object::New(env);
+                        obj.Set("name", Napi::String::New(env, attr.name));
+                        obj.Set("reference", Napi::String::New(env, attr.reference));
+                        obj.Set("type", Napi::String::New(env, "dataAttribute"));
+                        obj.Set("functionalConstraint", Napi::String::New(env, attr.functionalConstraint));
+                        obj.Set("mmsType", Napi::String::New(env, attr.mmsType));
+                        resultArray.Set(i, obj);
+                    }
+                    deferred_.Resolve(resultArray);
                     break;
                 }
 

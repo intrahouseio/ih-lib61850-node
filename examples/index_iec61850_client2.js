@@ -552,29 +552,26 @@ async function handleConnectionOpened2() {
 async function exploreModel() {
     try {
         console.log('\n=== 1. Получение корневых узлов ===');
-        const rootNodes = await client.browseDataModel();  // теперь только name, reference, type
+        const rootNodes = await client.browseDataModel();  // массив логических узлов с dataSets и reports
 
         console.log('\nНайдено Logical Nodes:');
         for (const ln of rootNodes) {
             console.log(`\n${ln.name} (${ln.reference})`);
 
-            // Получаем детальную информацию о логическом узле
-            const lnDetails = await client.browseDataModel(ln.reference);
-
-            // Выводим DataSets
-            if (lnDetails.dataSets && lnDetails.dataSets.length > 0) {
-                console.log(`   Datasets (${lnDetails.dataSets.length}):`);
-                lnDetails.dataSets.forEach((ds, idx) => {
+            // Выводим DataSets (уже есть в ln)
+            if (ln.dataSets && ln.dataSets.length > 0) {
+                console.log(`   Datasets (${ln.dataSets.length}):`);
+                ln.dataSets.forEach((ds, idx) => {
                     console.log(`     ${idx + 1}. ${ds.name}: ${ds.reference}`);
                 });
             } else {
                 console.log(`   Datasets: 0`);
             }
 
-            // Выводим Reports
-            if (lnDetails.reports && lnDetails.reports.length > 0) {
-                console.log(`   Reports (${lnDetails.reports.length}):`);
-                lnDetails.reports.forEach((report, idx) => {
+            // Выводим Reports (уже есть в ln)
+            if (ln.reports && ln.reports.length > 0) {
+                console.log(`   Reports (${ln.reports.length}):`);
+                ln.reports.forEach((report, idx) => {
                     const typeDesc = report.type === 'RP' ? 'Unbuffered' : 'Buffered';
                     console.log(`     ${idx + 1}. ${report.name} (${report.type} - ${typeDesc}): ${report.reference}`);
                 });
@@ -587,27 +584,31 @@ async function exploreModel() {
         const lln0 = rootNodes.find(ln => ln.name === 'LLN0');
         if (lln0) {
             console.log('\n=== 2. Исследуем LLN0 ===');
-            const lln0Details = await client.browseDataModel(lln0.reference);
             
-            console.log(`\nDataObjects в ${lln0Details.reference}: ${lln0Details.dataObjectsCount}`);
-            console.log(`DataSets в ${lln0Details.reference}: ${lln0Details.dataSetsCount}`);
-            
-            // Показываем ВСЕ DataObjects
-            console.log('\nВсе DataObjects:');
-            lln0Details.dataObjects.forEach((doObj, index) => {
-                console.log(`${index + 1}. ${doObj.name} (${doObj.cdc || 'Unknown'}) - ${doObj.reference}`);
+            // Получаем массив DataObject для LLN0
+            const dataObjects = await client.browseDataModel(lln0.reference);
+            console.log(`\nDataObjects в ${lln0.reference}: ${dataObjects.length}`);
+            dataObjects.forEach((doObj, index) => {
+                // Выводим полный объект для наглядности
+                console.log(`${index + 1}.`, doObj);
+            });
+
+            // Получаем атрибуты конкретного DataObject
+            console.log('\n=== 2.1 Атрибуты WAGO61850ServerDevice/XCBR1.Pos ===');
+            const attributes = await client.browseDataModel("WAGO61850ServerDevice/XCBR1.Pos");
+            attributes.forEach(attr => {
+                console.log(attr);  // вывод в виде объекта
             });
             
-            // Выбираем первый DataSet для кэширования
-            // Выбираем первый DataSet для кэширования
-            if (lln0Details.dataSets.length > 0) {
-                const firstDataSet = lln0Details.dataSets[0];
+            // Выбираем первый DataSet из LLN0 для кэширования
+            if (lln0.dataSets && lln0.dataSets.length > 0) {
+                const firstDataSet = lln0.dataSets[0];
                 console.log(`\n=== 3. Кэшируем DataSet ${firstDataSet.reference} ===`);
                 
-                // ✅ ПРАВИЛЬНО: вызываем readDataSetModel для заполнения кэша структур
+                // Заполняем кэш структур через readDataSetModel
                 await client.readDataSetModel([firstDataSet.reference]);
                 
-                // Теперь можно быстро читать этот DataSet
+                // Быстрое чтение DataSet
                 console.log('\n=== 4. Быстрое чтение DataSet ===');
                 const pollResults = await client.pollDataSetValues([firstDataSet.reference]);         
                 
@@ -618,7 +619,6 @@ async function exploreModel() {
                         console.log(`  Read time: ${result.readTimeMicros} µs`);
                         console.log(`  Process time: ${result.processTimeMicros} µs`);
                         
-                        // Выводим ВСЕ значения
                         console.log('\n  Значения:');
                         Object.entries(result.values).forEach(([ref, value], index) => {
                             console.log(`  [${index + 1}] ${ref}:`, util.inspect(value, { 
@@ -633,8 +633,8 @@ async function exploreModel() {
                 });
             }
             
-            // Выбираем первый отчет для кэширования
-            if (lln0.reports.length > 0) {
+            // Выбираем первый отчет для подписки
+            if (lln0.reports && lln0.reports.length > 0) {
                 const firstReport = lln0.reports.find(r => r.reference.includes('ReportBlock0101'));
                 if (firstReport) {
                     console.log(`\n=== 5. Кэшируем отчет ${firstReport.reference} ===`);
@@ -650,14 +650,13 @@ async function exploreModel() {
                     console.log(`  Buffer Time: ${reportDetails.bufTm} ms`);
                     console.log(`  GI: ${reportDetails.gi}`);
                     
-                    // Подписываемся на отчет
                     console.log(`\n=== 6. Подписываемся на отчет ===`);
                     await client.enableReporting(firstReport.reference, reportDetails.datasetRef);
                 }
             }
         }
         
-        // Пример чтения одиночного значения
+        // Пример чтения одиночных значений
         console.log('\n=== 7. Чтение одиночных значений ===');
         const singleValues = await client.readData([
             'WAGO61850ServerDevice/XCBR1.Pos[ST]',
