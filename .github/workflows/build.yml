@@ -51,7 +51,7 @@ jobs:
   build-and-upload:
     needs: create-release
     runs-on: ${{ matrix.os }}
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: always() && (needs.create-release.result == 'success' || needs.create-release.result == 'skipped')
     strategy:
       matrix:
         os:
@@ -169,6 +169,7 @@ jobs:
         shell: bash
 
       - name: Upload prebuilt binaries to GitHub Releases
+        if: needs.create-release.result == 'success'
         uses: softprops/action-gh-release@v2
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
@@ -185,7 +186,7 @@ jobs:
   update-builds-and-publish:
     needs: build-and-upload
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+  if: always() && needs.build-and-upload.result != 'failure' && needs.build-and-upload.result != 'cancelled'
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
