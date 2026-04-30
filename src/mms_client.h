@@ -33,6 +33,8 @@ public:
     static Napi::Object Init(Napi::Env env, Napi::Object exports);
     MmsClient(const Napi::CallbackInfo& info);
     ~MmsClient(); 
+
+    Napi::Value ReadDataModel(const Napi::CallbackInfo& info);
     std::recursive_timed_mutex& GetMutex() { return connMutex_; }   
 
     // флаг для управления соединением
@@ -123,7 +125,7 @@ public:
 
     void CacheStructureElements(const std::string& ref, FunctionalConstraint fc,
                                const std::vector<std::string>& elementNames,
-                               const std::vector<MmsType>& elementTypes);
+                               const std::vector<MmsType>& elementTypes);                               
 
     Napi::Value PollDataSetValues(const Napi::CallbackInfo& info);
 
@@ -165,6 +167,9 @@ private:
 
     Napi::Value ReadDataSetValuesFast(const std::string& datasetRef, Napi::Env env);    
 
+    // Глобальный кэш для структур, не привязанных к конкретному DataSet
+    std::unordered_map<std::string, StructureElementNames> globalStructureCache_;
+
     // Кэш для имен элементов структур
     std::unordered_map<std::string, DataSetCache> datasetCache_;
     
@@ -188,6 +193,10 @@ private:
     Napi::Value GetDataSetDetails(Napi::Env env, const std::string& dsRef);
     Napi::Value GetReportDetails(Napi::Env env, const std::string& rRef);   
 
+    // Вспомогательные методы для работы с кэшем
+    void AddToStructureCache(const std::string& fullRef, 
+                             const std::vector<std::string>& elementNames,
+                             const std::vector<MmsType>& elementTypes);    
 };
 
 #endif

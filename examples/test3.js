@@ -17,6 +17,19 @@ async function browseModel() {
         console.log('Data model (first 5 nodes):');
         console.log(JSON.stringify(model.slice(0, 5), null, 2));
         // Если нужно всё: console.log(JSON.stringify(model, null, 2));
+        // Пример: кэшируем структуры для нескольких объектов
+        await client.readDataModel([
+            'WAGO61850ServerDevice/XCBR1.Pos[ST]',
+            'WAGO61850ServerDevice/LLN0.Mod[CO]',
+            'WAGO61850ServerDevice/GGIO1.Ind1[ST]'
+        ]);
+
+        // Теперь последующие вызовы readData вернут осмысленные имена
+        const values = await client.readData([
+            'WAGO61850ServerDevice/XCBR1.Pos[ST]',
+            'WAGO61850ServerDevice/LLN0.Mod[CO]'
+        ]);
+        console.log(values); // stVal, ctlVal и т.д.
     } catch (err) {
         console.error('Browse error:', err);
     } finally {
