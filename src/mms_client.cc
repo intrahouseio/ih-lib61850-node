@@ -811,10 +811,52 @@ namespace {
 
                         Napi::Array membersArr = Napi::Array::New(env, ds.members.size());
                         for (size_t i = 0; i < ds.members.size(); ++i) {
-                            Napi::Object memObj = Napi::Object::New(env);
-                            memObj.Set("reference", Napi::String::New(env, ds.members[i].first));
-                            memObj.Set("name", Napi::String::New(env, ds.members[i].second));
-                            membersArr.Set(i, memObj);
+                            const std::string& fullRef = ds.members[i].first;   // например "A01LD0/MT_MMXU1.Hz[MX]"
+                            const std::string& simpleName = ds.members[i].second; // "Hz[MX]" (не используется)
+
+                            // Извлекаем чистую ссылку (без FC) и FC-часть
+                            std::string refWithoutFc = fullRef;
+                            std::string fcPart;
+                            size_t bracketPos = fullRef.find('[');
+                            if (bracketPos != std::string::npos && fullRef.back() == ']') {
+                                fcPart = fullRef.substr(bracketPos);               // "[MX]"
+                                refWithoutFc = fullRef.substr(0, bracketPos);      // "A01LD0/MT_MMXU1.Hz"
+                            }
+
+                            // Формируем отображаемое имя: удаляем логическое устройство (всё до '/')
+                            std::string displayName = refWithoutFc;
+                            size_t slashPos = displayName.find('/');
+                            if (slashPos != std::string::npos) {
+                                displayName = displayName.substr(slashPos + 1);    // "MT_MMXU1.Hz"
+                            }
+
+                            // Определяем тип (CDC) на основе FC
+                            std::string typeStr;
+                            if (fcPart == "[ST]") {
+                                // Можно уточнить по имени: если содержит "Pos" -> DPC, иначе SPS
+                                if (displayName.find("Pos") != std::string::npos ||
+                                    displayName.find("Sw") != std::string::npos)
+                                    typeStr = "DPC";
+                                else
+                                    typeStr = "SPS";
+                            } else if (fcPart == "[MX]") {
+                                typeStr = "MV";
+                            } else if (fcPart == "[CO]") {
+                                typeStr = "CO";
+                            } else if (fcPart == "[CF]") {
+                                typeStr = "CF";
+                            } else if (fcPart == "[DC]") {
+                                typeStr = "LPL";
+                            } else {
+                                typeStr = "Unknown";
+                            }
+
+                            Napi::Object memberObj = Napi::Object::New(env);
+                            memberObj.Set("reference", Napi::String::New(env, refWithoutFc));
+                            memberObj.Set("name", Napi::String::New(env, displayName));
+                            memberObj.Set("fc", Napi::String::New(env, fcPart));
+                            memberObj.Set("type", Napi::String::New(env, typeStr));
+                            membersArr.Set(i, memberObj);
                         }
                         obj.Set("members", membersArr);
                     }

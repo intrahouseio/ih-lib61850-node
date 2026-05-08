@@ -21,13 +21,17 @@ async function browseModel() {
         await client.readDataModel([
             'WAGO61850ServerDevice/XCBR1.Pos[ST]',
             'WAGO61850ServerDevice/LLN0.Mod[CO]',
-            'WAGO61850ServerDevice/GGIO1.Ind1[ST]'
+            'WAGO61850ServerDevice/GGIO1.Ind1[ST]',
+            'WAGO61850ServerDevice/LLN0.NamPlt[DC]',
+            'WAGO61850ServerDevice/LLN0.Diag[CO]'
         ]);
 
         // Теперь последующие вызовы readData вернут осмысленные имена
         const values = await client.readData([
             'WAGO61850ServerDevice/XCBR1.Pos[ST]',
-            'WAGO61850ServerDevice/LLN0.Mod[CO]'
+            'WAGO61850ServerDevice/LLN0.Mod[CO]',
+            'WAGO61850ServerDevice/LLN0.NamPlt[DC]',
+            'WAGO61850ServerDevice/LLN0.Diag[CO]'
         ]);
         console.log(values); // stVal, ctlVal и т.д.
     } catch (err) {
