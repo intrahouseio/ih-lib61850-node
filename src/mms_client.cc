@@ -324,7 +324,7 @@ namespace {
     }
 
     // Получить детали логического узла
-    static LogicalNodeDetails GetLogicalNodeDetailsWorker(IedConnection connection, const std::string& lnRef) {
+    /*static LogicalNodeDetails GetLogicalNodeDetailsWorker(IedConnection connection, const std::string& lnRef) {
         LogicalNodeDetails details;
         details.reference = lnRef;
         size_t slashPos = lnRef.find_last_of('/');
@@ -379,6 +379,68 @@ namespace {
         }
 
         // DataSets
+        LinkedList dsList = IedConnection_getLogicalNodeDirectory(connection, &error, lnRef.c_str(), ACSI_CLASS_DATA_SET);
+        if (error == IED_ERROR_OK && dsList) {
+            LinkedList dsItem = dsList;
+            while (dsItem) {
+                char* dsName = (char*)dsItem->data;
+                if (dsName) {
+                    DataSetInfo dsi;
+                    dsi.name = dsName;
+                    dsi.reference = lnRef + "." + dsName;
+                    dsi.type = "dataset";
+                    details.dataSets.push_back(dsi);
+                }
+                dsItem = LinkedList_getNext(dsItem);
+            }
+            LinkedList_destroy(dsList);
+        }
+
+        details.dataObjectsCount = details.dataObjects.size();
+        details.dataSetsCount = details.dataSets.size();
+        return details;
+    }*/
+
+    static LogicalNodeDetails GetLogicalNodeDetailsWorker(IedConnection connection, const std::string& lnRef) {
+        LogicalNodeDetails details;
+        details.reference = lnRef;
+        size_t slashPos = lnRef.find_last_of('/');
+        if (slashPos != std::string::npos)
+            details.name = lnRef.substr(slashPos + 1);
+        else
+            details.name = lnRef;
+
+        IedClientError error;
+
+        // DataObjects – получаем список
+        LinkedList doList = IedConnection_getLogicalNodeDirectory(connection, &error, lnRef.c_str(), ACSI_CLASS_DATA_OBJECT);
+        if (error == IED_ERROR_OK && doList) {
+            LinkedList doItem = doList;
+            while (doItem) {
+                char* doName = (char*)doItem->data;
+                if (doName) {
+                    std::string doNameStr(doName);
+                    // Пропускаем элементы, которые не являются DataObjects (Report Control Blocks)
+                    if (doNameStr.find("RP$") == 0 || doNameStr.find("BR$") == 0) {
+                        doItem = LinkedList_getNext(doItem);
+                        continue;
+                    }
+                    DataObjectInfo doi;
+                    doi.name = doName;
+                    std::string doRef = lnRef + "." + doName;
+                    doi.reference = doRef;
+                    
+                    // *** ТОЧНОЕ ОПРЕДЕЛЕНИЕ CDC через чтение с сервера ***
+                    doi.cdc = GetCdcForDataObject(connection, doRef);
+                    
+                    details.dataObjects.push_back(doi);
+                }
+                doItem = LinkedList_getNext(doItem);
+            }
+            LinkedList_destroy(doList);
+        }
+
+        // DataSets (без изменений)
         LinkedList dsList = IedConnection_getLogicalNodeDirectory(connection, &error, lnRef.c_str(), ACSI_CLASS_DATA_SET);
         if (error == IED_ERROR_OK && dsList) {
             LinkedList dsItem = dsList;
