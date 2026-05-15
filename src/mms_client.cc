@@ -770,7 +770,7 @@ namespace {
                         obj.Set("name", Napi::String::New(env, dobj.name));
                         obj.Set("reference", Napi::String::New(env, dobj.reference));
                         obj.Set("type", Napi::String::New(env, "dataObject"));
-                        //obj.Set("cdc", Napi::String::New(env, dobj.cdc));
+                        obj.Set("cdc", Napi::String::New(env, dobj.cdc));
                         resultArray.Set(i, obj);
                     }
                     deferred_.Resolve(resultArray);
@@ -786,7 +786,7 @@ namespace {
                         obj.Set("name", Napi::String::New(env, attr.name));
                         obj.Set("reference", Napi::String::New(env, attr.reference));
                         obj.Set("type", Napi::String::New(env, "dataAttribute"));
-                        obj.Set("functionalConstraint", Napi::String::New(env, attr.functionalConstraint));
+                        obj.Set("FC", Napi::String::New(env, attr.functionalConstraint));
                         obj.Set("mmsType", Napi::String::New(env, attr.mmsType));
                         resultArray.Set(i, obj);
                     }
