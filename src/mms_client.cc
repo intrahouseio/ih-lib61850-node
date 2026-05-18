@@ -101,7 +101,8 @@ namespace {
     static std::string GetCdcForDataObject(IedConnection connection, const std::string& doRef) {
         IedClientError error;
         
-        // 1. Проверка на DPC/SPS/INS/ACT через stVal
+        // ---- Статусные и измерения (старые проверки) ----
+        // stVal -> DPC, SPS, INS, ACT
         std::string stValRef = doRef + ".stVal";
         MmsVariableSpecification* spec = IedConnection_getVariableSpecification(connection, &error, stValRef.c_str(), IEC61850_FC_ST);
         if (error == IED_ERROR_OK && spec) {
@@ -111,11 +112,11 @@ namespace {
             if (type == MMS_BIT_STRING && size == 2) return "DPC";
             if (type == MMS_BIT_STRING && size == 1) return "SPS";
             if (type == MMS_INTEGER) return "INS";
-            if (type == MMS_BOOLEAN) return "SPS";   // ← ДОБАВЛЕНО
+            if (type == MMS_BOOLEAN) return "SPS";
             if (type == MMS_STRUCTURE) return "ACT";
         }
         
-        // 2. Проверка на MV через mag
+        // mag -> MV
         std::string magRef = doRef + ".mag";
         spec = IedConnection_getVariableSpecification(connection, &error, magRef.c_str(), IEC61850_FC_MX);
         if (error == IED_ERROR_OK && spec) {
@@ -124,7 +125,7 @@ namespace {
             if (type == MMS_STRUCTURE) return "MV";
         }
         
-        // 3. Проверка на LPL – vendor/configRev
+        // LPL через vendor или configRev
         std::string vendorRef = doRef + ".vendor";
         spec = IedConnection_getVariableSpecification(connection, &error, vendorRef.c_str(), IEC61850_FC_DC);
         if (error == IED_ERROR_OK && spec) {
@@ -138,7 +139,7 @@ namespace {
             return "LPL";
         }
         
-        // 4. Проверка на DPL – model
+        // DPL через model
         std::string modelRef = doRef + ".model";
         spec = IedConnection_getVariableSpecification(connection, &error, modelRef.c_str(), IEC61850_FC_DC);
         if (error == IED_ERROR_OK && spec) {
@@ -146,7 +147,7 @@ namespace {
             return "DPL";
         }
         
-        // 5. Проверка на Control (SPC/DPC/INC) через Oper
+        // ---- Управляющие объекты (Oper) ----
         std::string operRef = doRef + ".Oper";
         spec = IedConnection_getVariableSpecification(connection, &error, operRef.c_str(), IEC61850_FC_CO);
         if (error == IED_ERROR_OK && spec) {
@@ -156,7 +157,7 @@ namespace {
             if (type == MMS_BIT_STRING) return "DPC";
             if (type == MMS_INTEGER) return "INC";
             if (type == MMS_STRUCTURE) {
-                // Уточняем по ctlVal
+                // уточним по ctlVal
                 std::string ctlValRef = doRef + ".Oper.ctlVal";
                 IedClientError ctlError;
                 MmsVariableSpecification* ctlSpec = IedConnection_getVariableSpecification(connection, &ctlError, ctlValRef.c_str(), IEC61850_FC_CO);
@@ -167,11 +168,11 @@ namespace {
                     if (ctlType == MMS_BIT_STRING) return "DPC";
                     if (ctlType == MMS_INTEGER) return "INC";
                 }
-                return "SPC"; // fallback
+                return "SPC";
             }
         }
         
-        // 6. Проверка на BCR – actVal
+        // ---- BCR через actVal ----
         std::string actValRef = doRef + ".actVal";
         spec = IedConnection_getVariableSpecification(connection, &error, actValRef.c_str(), IEC61850_FC_ST);
         if (error == IED_ERROR_OK && spec) {
@@ -179,15 +180,34 @@ namespace {
             return "BCR";
         }
         
-        // 7. Проверка на WYE/DEL – phsA
+        // ---- WYE / DEL (наличие phsA, phsB, phsC) ----
         std::string phsARef = doRef + ".phsA";
         spec = IedConnection_getVariableSpecification(connection, &error, phsARef.c_str(), IEC61850_FC_MX);
         if (error == IED_ERROR_OK && spec) {
             MmsVariableSpecification_destroy(spec);
+            // Можно проверить наличие phsB, но для простоты возвращаем WYE
             return "WYE";
         }
+        // Необязательно: проверить на DEL (обычно тоже phsA, но может быть специфическое имя). Считаем WYE универсальным.
         
-        // 8. Эвристика по имени (для объектов, не имеющих stVal/mag/Oper, но явно статусных)
+        // ---- SETTINGS: ASG, ING, SPG, ING и т.д. через setVal (FC=CF или FC=SP) ----
+        // Сначала проверим .setVal с FC=CF (чаще всего)
+        std::string setValRef = doRef + ".setVal";
+        spec = IedConnection_getVariableSpecification(connection, &error, setValRef.c_str(), IEC61850_FC_CF);
+        if (error != IED_ERROR_OK || !spec) {
+            // Попробуем FC=SP
+            spec = IedConnection_getVariableSpecification(connection, &error, setValRef.c_str(), IEC61850_FC_SP);
+        }
+        if (error == IED_ERROR_OK && spec) {
+            MmsType type = static_cast<MmsType>(MmsVariableSpecification_getType(spec));
+            MmsVariableSpecification_destroy(spec);
+            if (type == MMS_FLOAT || type == MMS_STRUCTURE) return "ASG";   // ASG (аналоговая уставка)
+            if (type == MMS_INTEGER) return "ING";    // Integer Setting
+            if (type == MMS_BOOLEAN) return "SPG";    // Single Point Setting
+            // можно также ENUM, но пока не требуется
+        }
+        
+        // ---- Эвристика по имени для объектов без явных признаков (например, Loc, Alm, Ind) ----
         std::string lowerName = doRef;
         std::transform(lowerName.begin(), lowerName.end(), lowerName.begin(), ::tolower);
         if (lowerName.find("alm") != std::string::npos ||
