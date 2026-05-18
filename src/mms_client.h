@@ -11,6 +11,7 @@
 #include <chrono>
 #include <string>
 #include <iec61850_client.h>
+#include "mms_client_connection.h"
 
 // Структура для хранения информации о именах элементов структуры
 struct StructureElementNames {
