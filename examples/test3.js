@@ -1,69 +1,66 @@
+// test_cdc.js
 const { MmsClient } = require('../build/Release/addon_iec61850');
 const util = require('util');
 
 const client = new MmsClient((event, data) => {
-    console.log(`Event: ${event}, Data:`, util.inspect(data, { depth: 2 }));
     if (event === 'conn' && data.event === 'opened') {
         console.log('✅ Connected');
-        testDataSetFormat();
+        testCDC();
     }
     if (event === 'conn' && data.event === 'stateChanged' && data.state === 'closed') {
         console.log('🔌 Connection closed');
     }
+    if (event === 'data' && data.type === 'error') {
+        console.error('❌ Error:', data.reason);
+    }
 });
 
-async function testDataSetFormat() {
+async function testCDC() {
     try {
-        // Замените на существующий DataSet из вашего устройства
-        const datasetRef = 'WAGO61850ServerDevice/LLN0.DataSet02'; // или 'WAGO61850ServerDevice/LLN0.DataSet01'
-
-        console.log(`\n📊 Получение информации о DataSet: ${datasetRef}`);
-        const dsInfo = await client.browseDataModel(datasetRef);
-
-        if (!dsInfo.isValid) {
-            console.error('DataSet невалиден:', dsInfo.errorReason);
-            return;
+        // Получаем корневые узлы (Logical Nodes)
+        console.log('\n📡 Получение списка логических узлов...');
+        const rootNodes = await client.browseDataModel();  // массив ln с именами, reference, dataSets, reports
+        
+        console.log(`\n🔍 Найдено логических узлов: ${rootNodes.length}\n`);
+        
+        // Перебираем все логические узлы и для каждого получаем DataObjects с CDC
+        for (const ln of rootNodes) {
+            console.log(`\n📦 Logical Node: ${ln.name} (${ln.reference})`);
+            
+            // Получаем DataObjects для данного LN
+            const dataObjects = await client.browseDataModel(ln.reference);
+            if (dataObjects && dataObjects.length > 0) {
+                console.log(`   DataObjects (${dataObjects.length}):`);
+                dataObjects.forEach(doObj => {
+                    // Выводим имя, CDC и ссылку
+                    console.log(`     - ${doObj.name} : ${doObj.cdc || 'Unknown'} -> ${doObj.reference}`);
+                });
+            } else {
+                console.log('   DataObjects: none');
+            }
         }
-
-        console.log(`\n✅ DataSet: ${dsInfo.reference}`);
-        console.log(`   Членов: ${dsInfo.memberCount}\n`);
-
-        const membersToShow = dsInfo.members.slice(0, 5);
-        membersToShow.forEach((member, idx) => {
-            console.log(`   ${idx + 1}. ${JSON.stringify(member, null, 2)}`);
-        });
-
-        if (dsInfo.memberCount > 5) {
-            console.log(`   ... и ещё ${dsInfo.memberCount - 5} членов`);
+        
+        // Альтернативно: можно выбрать конкретный LN для детального просмотра
+        // Например, если есть LLN0:
+        const lln0 = rootNodes.find(ln => ln.name === 'LLN0');
+        if (lln0) {
+            console.log(`\n⭐ Детальный вывод для LLN0:`);
+            const lln0dos = await client.browseDataModel(lln0.reference);
+            lln0dos.forEach(doObj => {
+                console.log(`   ${doObj.name} (${doObj.cdc}) -> ${doObj.reference}`);
+            });
         }
-
-        const hasAllFields = dsInfo.members.every(m =>
-            m.hasOwnProperty('reference') &&
-            m.hasOwnProperty('name') &&
-            m.hasOwnProperty('fc') &&
-            m.hasOwnProperty('type')
-        );
-        console.log(`\n🔍 Все члены содержат нужные поля: ${hasAllFields ? '✅ ДА' : '❌ НЕТ'}`);
-
-        const expectedFormat = {
-            reference: 'A01LD0/MT_MMXU1.Hz',
-            name: 'MT_MMXU1.Hz',
-            fc: '[MX]',
-            type: 'MV'
-        };
-        console.log('\n📝 Ожидаемый формат (пример):');
-        console.log(JSON.stringify(expectedFormat, null, 2));
-
+        
     } catch (err) {
-        console.error('Ошибка:', err);
+        console.error('Ошибка в testCDC:', err);
     } finally {
         await client.close();
     }
 }
 
-// Подключение (без await, так как connect не возвращает Promise)
+// Подключение
 client.connect({
-    ip: '192.168.0.106',
+    ip: '192.168.0.106',   // замените на IP вашего IED
     port: 102,
-    clientID: 'test_dataset_format'
+    clientID: 'test_cdc'
 });

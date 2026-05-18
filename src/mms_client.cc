@@ -100,18 +100,22 @@ namespace {
     // Определение CDC по ссылке DataObject (через спецификацию stVal или mag)
     static std::string GetCdcForDataObject(IedConnection connection, const std::string& doRef) {
         IedClientError error;
-        // Пробуем прочитать stVal (для DPC, SPS, DPS)
+        
+        // 1. Проверка на DPC/SPS/INS/ACT через stVal
         std::string stValRef = doRef + ".stVal";
         MmsVariableSpecification* spec = IedConnection_getVariableSpecification(connection, &error, stValRef.c_str(), IEC61850_FC_ST);
         if (error == IED_ERROR_OK && spec) {
             MmsType type = static_cast<MmsType>(MmsVariableSpecification_getType(spec));
+            int size = MmsVariableSpecification_getSize(spec);
             MmsVariableSpecification_destroy(spec);
-            if (type == MMS_BIT_STRING && MmsVariableSpecification_getSize(spec) == 2) return "DPC";
-            if (type == MMS_BIT_STRING && MmsVariableSpecification_getSize(spec) == 1) return "SPS";
+            if (type == MMS_BIT_STRING && size == 2) return "DPC";
+            if (type == MMS_BIT_STRING && size == 1) return "SPS";
             if (type == MMS_INTEGER) return "INS";
+            if (type == MMS_BOOLEAN) return "SPS";   // ← ДОБАВЛЕНО
             if (type == MMS_STRUCTURE) return "ACT";
         }
-        // Пробуем mag (для MV)
+        
+        // 2. Проверка на MV через mag
         std::string magRef = doRef + ".mag";
         spec = IedConnection_getVariableSpecification(connection, &error, magRef.c_str(), IEC61850_FC_MX);
         if (error == IED_ERROR_OK && spec) {
@@ -119,14 +123,86 @@ namespace {
             MmsVariableSpecification_destroy(spec);
             if (type == MMS_STRUCTURE) return "MV";
         }
-        // Пробуем namPlt (LPL)
-        std::string namPltRef = doRef + ".namPlt";
-        spec = IedConnection_getVariableSpecification(connection, &error, namPltRef.c_str(), IEC61850_FC_DC);
+        
+        // 3. Проверка на LPL – vendor/configRev
+        std::string vendorRef = doRef + ".vendor";
+        spec = IedConnection_getVariableSpecification(connection, &error, vendorRef.c_str(), IEC61850_FC_DC);
         if (error == IED_ERROR_OK && spec) {
             MmsVariableSpecification_destroy(spec);
             return "LPL";
         }
-        // По умолчанию – неизвестно
+        std::string configRevRef = doRef + ".configRev";
+        spec = IedConnection_getVariableSpecification(connection, &error, configRevRef.c_str(), IEC61850_FC_DC);
+        if (error == IED_ERROR_OK && spec) {
+            MmsVariableSpecification_destroy(spec);
+            return "LPL";
+        }
+        
+        // 4. Проверка на DPL – model
+        std::string modelRef = doRef + ".model";
+        spec = IedConnection_getVariableSpecification(connection, &error, modelRef.c_str(), IEC61850_FC_DC);
+        if (error == IED_ERROR_OK && spec) {
+            MmsVariableSpecification_destroy(spec);
+            return "DPL";
+        }
+        
+        // 5. Проверка на Control (SPC/DPC/INC) через Oper
+        std::string operRef = doRef + ".Oper";
+        spec = IedConnection_getVariableSpecification(connection, &error, operRef.c_str(), IEC61850_FC_CO);
+        if (error == IED_ERROR_OK && spec) {
+            MmsType type = static_cast<MmsType>(MmsVariableSpecification_getType(spec));
+            MmsVariableSpecification_destroy(spec);
+            if (type == MMS_BOOLEAN) return "SPC";
+            if (type == MMS_BIT_STRING) return "DPC";
+            if (type == MMS_INTEGER) return "INC";
+            if (type == MMS_STRUCTURE) {
+                // Уточняем по ctlVal
+                std::string ctlValRef = doRef + ".Oper.ctlVal";
+                IedClientError ctlError;
+                MmsVariableSpecification* ctlSpec = IedConnection_getVariableSpecification(connection, &ctlError, ctlValRef.c_str(), IEC61850_FC_CO);
+                if (ctlError == IED_ERROR_OK && ctlSpec) {
+                    MmsType ctlType = static_cast<MmsType>(MmsVariableSpecification_getType(ctlSpec));
+                    MmsVariableSpecification_destroy(ctlSpec);
+                    if (ctlType == MMS_BOOLEAN) return "SPC";
+                    if (ctlType == MMS_BIT_STRING) return "DPC";
+                    if (ctlType == MMS_INTEGER) return "INC";
+                }
+                return "SPC"; // fallback
+            }
+        }
+        
+        // 6. Проверка на BCR – actVal
+        std::string actValRef = doRef + ".actVal";
+        spec = IedConnection_getVariableSpecification(connection, &error, actValRef.c_str(), IEC61850_FC_ST);
+        if (error == IED_ERROR_OK && spec) {
+            MmsVariableSpecification_destroy(spec);
+            return "BCR";
+        }
+        
+        // 7. Проверка на WYE/DEL – phsA
+        std::string phsARef = doRef + ".phsA";
+        spec = IedConnection_getVariableSpecification(connection, &error, phsARef.c_str(), IEC61850_FC_MX);
+        if (error == IED_ERROR_OK && spec) {
+            MmsVariableSpecification_destroy(spec);
+            return "WYE";
+        }
+        
+        // 8. Эвристика по имени (для объектов, не имеющих stVal/mag/Oper, но явно статусных)
+        std::string lowerName = doRef;
+        std::transform(lowerName.begin(), lowerName.end(), lowerName.begin(), ::tolower);
+        if (lowerName.find("alm") != std::string::npos ||
+            lowerName.find("ind") != std::string::npos ||
+            lowerName.find("loc") != std::string::npos ||
+            lowerName.find("wrn") != std::string::npos ||
+            lowerName.find("outov") != std::string::npos ||
+            lowerName.find("inov") != std::string::npos ||
+            lowerName.find("pwrup") != std::string::npos ||
+            lowerName.find("pwrdn") != std::string::npos ||
+            lowerName.find("pwrsupalm") != std::string::npos ||
+            lowerName.find("proxy") != std::string::npos) {
+            return "SPS";
+        }
+        
         return "Unknown";
     }
 
