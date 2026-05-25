@@ -167,7 +167,16 @@ namespace {
             MmsVariableSpecification_destroy(spec);
             return "BCR";
         }
-        
+
+        // *** НОВОЕ: проверка на CMV (комплексное значение) – наличие cVal (FC=MX) ***
+        std::string cValRef = doRef + ".cVal";
+        spec = IedConnection_getVariableSpecification(connection, &error, cValRef.c_str(), IEC61850_FC_MX);
+        if (error == IED_ERROR_OK && spec) {
+            MmsType type = static_cast<MmsType>(MmsVariableSpecification_getType(spec));
+            MmsVariableSpecification_destroy(spec);
+            if (type == MMS_STRUCTURE) return "CMV";
+        }
+                        
         // 7. Проверка на WYE – наличие phsA (FC=MX)
         std::string phsARef = doRef + ".phsA";
         spec = IedConnection_getVariableSpecification(connection, &error, phsARef.c_str(), IEC61850_FC_MX);
@@ -958,50 +967,28 @@ namespace {
                         Napi::Array membersArr = Napi::Array::New(env, ds.members.size());
                         for (size_t i = 0; i < ds.members.size(); ++i) {
                             const std::string& fullRef = ds.members[i].first;   // например "A01LD0/MT_MMXU1.Hz[MX]"
-                            const std::string& simpleName = ds.members[i].second; // "Hz[MX]" (не используется)
-
-                            // Извлекаем чистую ссылку (без FC) и FC-часть
-                            std::string refWithoutFc = fullRef;
-                            std::string fcPart;
+                            
+                            // Извлекаем чистую ссылку (без FC)
+                            std::string cleanRef = fullRef;
                             size_t bracketPos = fullRef.find('[');
                             if (bracketPos != std::string::npos && fullRef.back() == ']') {
-                                fcPart = fullRef.substr(bracketPos);               // "[MX]"
-                                refWithoutFc = fullRef.substr(0, bracketPos);      // "A01LD0/MT_MMXU1.Hz"
+                                cleanRef = fullRef.substr(0, bracketPos);      // "A01LD0/MT_MMXU1.Hz"
                             }
-
-                            // Формируем отображаемое имя: удаляем логическое устройство (всё до '/')
-                            std::string displayName = refWithoutFc;
+                            
+                            // Формируем отображаемое имя (без логического устройства)
+                            std::string displayName = cleanRef;
                             size_t slashPos = displayName.find('/');
                             if (slashPos != std::string::npos) {
-                                displayName = displayName.substr(slashPos + 1);    // "MT_MMXU1.Hz"
+                                displayName = displayName.substr(slashPos + 1);
                             }
-
-                            // Определяем тип (CDC) на основе FC
-                            std::string typeStr;
-                            if (fcPart == "[ST]") {
-                                // Можно уточнить по имени: если содержит "Pos" -> DPC, иначе SPS
-                                if (displayName.find("Pos") != std::string::npos ||
-                                    displayName.find("Sw") != std::string::npos)
-                                    typeStr = "DPC";
-                                else
-                                    typeStr = "SPS";
-                            } else if (fcPart == "[MX]") {
-                                typeStr = "MV";
-                            } else if (fcPart == "[CO]") {
-                                typeStr = "CO";
-                            } else if (fcPart == "[CF]") {
-                                typeStr = "CF";
-                            } else if (fcPart == "[DC]") {
-                                typeStr = "LPL";
-                            } else {
-                                typeStr = "Unknown";
-                            }
-
+                            
+                            // Определяем CDC (через GetCdcForDataObject)
+                            std::string cdc = GetCdcForDataObject(connection_, cleanRef);
+                            
                             Napi::Object memberObj = Napi::Object::New(env);
-                            memberObj.Set("reference", Napi::String::New(env, refWithoutFc));
+                            memberObj.Set("reference", Napi::String::New(env, cleanRef));
                             memberObj.Set("name", Napi::String::New(env, displayName));
-                            memberObj.Set("fc", Napi::String::New(env, fcPart));
-                            memberObj.Set("type", Napi::String::New(env, typeStr));
+                            memberObj.Set("cdc", Napi::String::New(env, cdc));
                             membersArr.Set(i, memberObj);
                         }
                         obj.Set("members", membersArr);
@@ -1377,23 +1364,32 @@ public:
     }
     
     void OnOK() override {
-        Napi::Env env = env_;
-        Napi::Array resultArray = Napi::Array::New(env, results_.size());
-        for (size_t idx = 0; idx < results_.size(); ++idx) {
-            DataSetPollResult& res = results_[idx];
-            Napi::Object obj = Napi::Object::New(env);
-            obj.Set("datasetRef", Napi::String::New(env, res.datasetRef));
-            obj.Set("isValid", Napi::Boolean::New(env, res.isValid));
-            if (!res.isValid) {
-                obj.Set("errorReason", Napi::String::New(env, res.errorReason));
-            } else {
-                obj.Set("count", Napi::Number::New(env, res.count));
-                obj.Set("readTimeMicros", Napi::Number::New(env, (double)res.readTimeMicros));
-                obj.Set("processTimeMicros", Napi::Number::New(env, (double)res.processTimeMicros));
-                Napi::Object valuesObj = Napi::Object::New(env);
-                for (size_t i = 0; i < res.values.size(); ++i) {
-                    Napi::Value jsValue = ResultDataToNapiWithNames(env, res.values[i], res.memberRefs[i]);
-                    valuesObj.Set(res.memberRefs[i], jsValue);
+    Napi::Env env = env_;
+    Napi::Array resultArray = Napi::Array::New(env, results_.size());
+    for (size_t idx = 0; idx < results_.size(); ++idx) {
+        DataSetPollResult& res = results_[idx];
+        Napi::Object obj = Napi::Object::New(env);
+        obj.Set("datasetRef", Napi::String::New(env, res.datasetRef));
+        obj.Set("isValid", Napi::Boolean::New(env, res.isValid));
+        if (!res.isValid) {
+            obj.Set("errorReason", Napi::String::New(env, res.errorReason));
+        } else {
+            obj.Set("count", Napi::Number::New(env, res.count));
+            obj.Set("readTimeMicros", Napi::Number::New(env, (double)res.readTimeMicros));
+            obj.Set("processTimeMicros", Napi::Number::New(env, (double)res.processTimeMicros));
+            
+            Napi::Object valuesObj = Napi::Object::New(env);
+            for (size_t i = 0; i < res.values.size(); ++i) {
+                // Берём исходную ссылку с [FC]
+                std::string fullRef = res.memberRefs[i];
+                // Удаляем суффикс [FC]
+                std::string cleanRef = fullRef;
+                size_t bracketPos = fullRef.find('[');
+                if (bracketPos != std::string::npos && fullRef.back() == ']') {
+                    cleanRef = fullRef.substr(0, bracketPos);
+                }
+                    Napi::Value jsValue = ResultDataToNapiWithNames(env, res.values[i], cleanRef);
+                    valuesObj.Set(cleanRef, jsValue);
                 }
                 obj.Set("values", valuesObj);
             }
@@ -5029,35 +5025,41 @@ void MmsClient::ReportCallback(void* parameter, ClientReport report) {
     
     // Отправка в JS через TSFN (копируем данные)
     if (!reportItems.empty() && client->tsfn_) {
-        auto status = client->tsfn_.NonBlockingCall([client, rcbRef, rptId, timestamp, hasTimestamp, reportItems, currentReport]
-                                                    (Napi::Env env, Napi::Function cb) {
-            try {
-                Napi::Object eventObj = Napi::Object::New(env);
-                eventObj.Set("clientID", Napi::String::New(env, client->clientID_));
-                eventObj.Set("type", "data");
-                eventObj.Set("event", "report");
-                eventObj.Set("rcbRef", Napi::String::New(env, rcbRef));
-                eventObj.Set("rptId", Napi::String::New(env, rptId));
-                if (hasTimestamp) eventObj.Set("timestamp", Napi::Number::New(env, (double)timestamp));
-                
-                Napi::Object valuesObj = Napi::Object::New(env);
-                Napi::Object reasonsObj = Napi::Object::New(env);
-                for (const auto& item : reportItems) {
-                    Napi::Value jsValue = ResultDataToNapiWithNames(env, item.resultData, item.fullRef);
-                    valuesObj.Set(item.fullRef, jsValue);
-                    reasonsObj.Set(item.fullRef, item.reason);
+            auto status = client->tsfn_.NonBlockingCall([client, rcbRef, rptId, timestamp, hasTimestamp, reportItems, currentReport]
+                                                        (Napi::Env env, Napi::Function cb) {
+                try {
+                    Napi::Object eventObj = Napi::Object::New(env);
+                    eventObj.Set("clientID", Napi::String::New(env, client->clientID_));
+                    eventObj.Set("type", "data");
+                    eventObj.Set("event", "report");
+                    eventObj.Set("rcbRef", Napi::String::New(env, rcbRef));
+                    eventObj.Set("rptId", Napi::String::New(env, rptId));
+                    if (hasTimestamp) eventObj.Set("timestamp", Napi::Number::New(env, (double)timestamp));
+                    
+                    Napi::Object valuesObj = Napi::Object::New(env);
+                    Napi::Object reasonsObj = Napi::Object::New(env);
+                    for (const auto& item : reportItems) {
+                        // Очищаем ссылку от [FC]
+                        std::string cleanRef = item.fullRef;
+                        size_t bracketPos = cleanRef.find('[');
+                        if (bracketPos != std::string::npos && cleanRef.back() == ']') {
+                            cleanRef = cleanRef.substr(0, bracketPos);
+                        }
+                        Napi::Value jsValue = ResultDataToNapiWithNames(env, item.resultData, cleanRef);
+                        valuesObj.Set(cleanRef, jsValue);
+                        reasonsObj.Set(cleanRef, item.reason);
+                    }
+                    eventObj.Set("values", valuesObj);
+                    eventObj.Set("reasons", reasonsObj);
+                    eventObj.Set("reportNumber", Napi::Number::New(env, currentReport));
+                    eventObj.Set("itemsInReport", Napi::Number::New(env, (uint32_t)reportItems.size()));
+                    eventObj.Set("totalElementsProcessed", Napi::Number::New(env, MmsClient::totalElementsProcessed_.load()));
+                    
+                    cb.Call({Napi::String::New(env, "data"), eventObj});
+                } catch (const std::exception& e) {
+                    printf("  TSFN callback exception: %s\n", e.what());
                 }
-                eventObj.Set("values", valuesObj);
-                eventObj.Set("reasons", reasonsObj);
-                eventObj.Set("reportNumber", Napi::Number::New(env, currentReport));
-                eventObj.Set("itemsInReport", Napi::Number::New(env, (uint32_t)reportItems.size()));
-                eventObj.Set("totalElementsProcessed", Napi::Number::New(env, MmsClient::totalElementsProcessed_.load()));
-                
-                cb.Call({Napi::String::New(env, "data"), eventObj});
-            } catch (const std::exception& e) {
-                printf("  TSFN callback exception: %s\n", e.what());
-            }
-        });
+            });         
         if (status != napi_ok) {
             printf("  Failed to queue report to TSFN\n");
         }
