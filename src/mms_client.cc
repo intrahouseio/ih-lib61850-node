@@ -185,6 +185,7 @@ namespace {
             return "WYE";
         }
         
+        
         // 8. Проверка на DEL – наличие neut (FC=MX)
         std::string neutRef = doRef + ".neut";
         spec = IedConnection_getVariableSpecification(connection, &error, neutRef.c_str(), IEC61850_FC_MX);
