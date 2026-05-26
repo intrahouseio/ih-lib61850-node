@@ -103,7 +103,7 @@ namespace {
     static std::string GetCdcForDataObject(IedConnection connection, const std::string& doRef) {
         IedClientError error;
         
-        // 1. Проверка на DPC/SPS/INS/ACT через stVal
+        // 1. Проверка на DPC/SPS/INS/ACT через stVal (FC=ST)
         std::string stValRef = doRef + ".stVal";
         MmsVariableSpecification* spec = IedConnection_getVariableSpecification(connection, &error, stValRef.c_str(), IEC61850_FC_ST);
         if (error == IED_ERROR_OK && spec) {
@@ -117,7 +117,15 @@ namespace {
             if (type == MMS_STRUCTURE) return "ACT";
         }
         
-        // 2. Проверка на MV через mag
+        // 2. Проверка на CMV – наличие cVal (FC=MX)
+        std::string cValRef = doRef + ".cVal";
+        spec = IedConnection_getVariableSpecification(connection, &error, cValRef.c_str(), IEC61850_FC_MX);
+        if (error == IED_ERROR_OK && spec) {
+            MmsVariableSpecification_destroy(spec);
+            return "CMV";
+        }
+        
+        // 3. Проверка на MV – mag (FC=MX)
         std::string magRef = doRef + ".mag";
         spec = IedConnection_getVariableSpecification(connection, &error, magRef.c_str(), IEC61850_FC_MX);
         if (error == IED_ERROR_OK && spec) {
@@ -126,7 +134,7 @@ namespace {
             if (type == MMS_STRUCTURE) return "MV";
         }
         
-        // 3. Проверка на LPL – vendor/configRev (FC=DC)
+        // 4. Проверка на LPL – vendor/configRev (FC=DC)
         std::string vendorRef = doRef + ".vendor";
         spec = IedConnection_getVariableSpecification(connection, &error, vendorRef.c_str(), IEC61850_FC_DC);
         if (error == IED_ERROR_OK && spec) {
@@ -140,7 +148,7 @@ namespace {
             return "LPL";
         }
         
-        // 4. Проверка на DPL – model (FC=DC)
+        // 5. Проверка на DPL – model (FC=DC)
         std::string modelRef = doRef + ".model";
         spec = IedConnection_getVariableSpecification(connection, &error, modelRef.c_str(), IEC61850_FC_DC);
         if (error == IED_ERROR_OK && spec) {
@@ -148,7 +156,7 @@ namespace {
             return "DPL";
         }
         
-        // 5. Проверка на Control (SPC/DPC/INC) через Oper (FC=CO)
+        // 6. Проверка на Control (SPC/DPC/INC) через Oper (FC=CO)
         std::string operRef = doRef + ".Oper";
         spec = IedConnection_getVariableSpecification(connection, &error, operRef.c_str(), IEC61850_FC_CO);
         if (error == IED_ERROR_OK && spec) {
@@ -160,41 +168,15 @@ namespace {
             if (type == MMS_STRUCTURE) return "SPC";
         }
         
-        // 6. Проверка на BCR – actVal (FC=ST)
+        // 7. Проверка на BCR – actVal (FC=ST)
         std::string actValRef = doRef + ".actVal";
         spec = IedConnection_getVariableSpecification(connection, &error, actValRef.c_str(), IEC61850_FC_ST);
         if (error == IED_ERROR_OK && spec) {
             MmsVariableSpecification_destroy(spec);
             return "BCR";
         }
-
-        // *** НОВОЕ: проверка на CMV (комплексное значение) – наличие cVal (FC=MX) ***
-        std::string cValRef = doRef + ".cVal";
-        spec = IedConnection_getVariableSpecification(connection, &error, cValRef.c_str(), IEC61850_FC_MX);
-        if (error == IED_ERROR_OK && spec) {
-            MmsType type = static_cast<MmsType>(MmsVariableSpecification_getType(spec));
-            MmsVariableSpecification_destroy(spec);
-            if (type == MMS_STRUCTURE) return "CMV";
-        }
-                        
-        // 7. Проверка на WYE – наличие phsA (FC=MX)
-        std::string phsARef = doRef + ".phsA";
-        spec = IedConnection_getVariableSpecification(connection, &error, phsARef.c_str(), IEC61850_FC_MX);
-        if (error == IED_ERROR_OK && spec) {
-            MmsVariableSpecification_destroy(spec);
-            return "WYE";
-        }
         
-        
-        // 8. Проверка на DEL – наличие neut (FC=MX)
-        std::string neutRef = doRef + ".neut";
-        spec = IedConnection_getVariableSpecification(connection, &error, neutRef.c_str(), IEC61850_FC_MX);
-        if (error == IED_ERROR_OK && spec) {
-            MmsVariableSpecification_destroy(spec);
-            return "DEL";
-        }
-        
-        // 9. Проверка на настройки (ASG/ING/SPG) через setVal (FC=CF)
+        // 8. Проверка на настройки (ASG/ING/SPG) через setVal (FC=CF)
         std::string setValRef = doRef + ".setVal";
         spec = IedConnection_getVariableSpecification(connection, &error, setValRef.c_str(), IEC61850_FC_CF);
         if (error == IED_ERROR_OK && spec) {
@@ -205,9 +187,37 @@ namespace {
             if (type == MMS_BOOLEAN) return "SPG";
         }
         
-        // 10. Эвристика по имени для статусных объектов (SPS)
+        // 9. Проверка на WYE/DEL по наличию phsA/neut (FC=MX)
+        std::string phsARef = doRef + ".phsA";
+        spec = IedConnection_getVariableSpecification(connection, &error, phsARef.c_str(), IEC61850_FC_MX);
+        if (error == IED_ERROR_OK && spec) {
+            MmsVariableSpecification_destroy(spec);
+            return "WYE";
+        }
+        std::string neutRef = doRef + ".neut";
+        spec = IedConnection_getVariableSpecification(connection, &error, neutRef.c_str(), IEC61850_FC_MX);
+        if (error == IED_ERROR_OK && spec) {
+            MmsVariableSpecification_destroy(spec);
+            return "DEL";
+        }
+        
+        // 10. Специальные нестандартные типы по имени DataObject
         std::string lowerName = doRef;
         std::transform(lowerName.begin(), lowerName.end(), lowerName.begin(), ::tolower);
+        
+        // PNV -> PNV-WYE, PPV -> PPV-DEL (как в запросе)
+        if (lowerName.find("pnv") != std::string::npos) {
+            return "PNV-WYE";
+        }
+        if (lowerName.find("ppv") != std::string::npos) {
+            return "PPV-DEL";
+        }
+        // OpEx -> ACT
+        if (lowerName.find("opex") != std::string::npos) {
+            return "ACT";
+        }
+        
+        // 11. Эвристика по имени для статусных объектов (SPS)
         if (lowerName.find("alm") != std::string::npos ||
             lowerName.find("ind") != std::string::npos ||
             lowerName.find("loc") != std::string::npos ||
