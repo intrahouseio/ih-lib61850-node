@@ -4887,13 +4887,13 @@ void MmsClient::ReportCallback(void* parameter, ClientReport report) {
     // Пытаемся захватить мьютекс с таймаутом 100 мс
     std::unique_lock<std::recursive_timed_mutex> lock(client->connMutex_, std::defer_lock);
     if (!lock.try_lock_for(std::chrono::milliseconds(100))) {
-        printf("ReportCallback: mutex busy, skipping report (client %s)\n", client->clientID_.c_str());
+        //printf("ReportCallback: mutex busy, skipping report (client %s)\n", client->clientID_.c_str());
         return;
     }
     
     // Теперь мьютекс захвачен, можно безопасно работать с разделяемыми данными
     if (client->isClosing_ || !client->connected_) {
-        printf("ReportCallback: client closing or disconnected, skipping\n");
+        //printf("ReportCallback: client closing or disconnected, skipping\n");
         return;
     }
     
@@ -4904,18 +4904,18 @@ void MmsClient::ReportCallback(void* parameter, ClientReport report) {
     const char* rcbRefRaw = ClientReport_getRcbReference(report);
     const char* rptIdRaw = ClientReport_getRptId(report);
     if (!rcbRefRaw) {
-        printf("ReportCallback: no RCB reference\n");
+        //printf("ReportCallback: no RCB reference\n");
         return;
     }
     std::string rcbRef(rcbRefRaw);
     std::string rptId = rptIdRaw ? rptIdRaw : "unknown";
     
-    printf("\n=== ReportCallback [REPORT#%d] ===\n", currentReport);
-    printf("  RCB: %s, rptId: %s\n", rcbRef.c_str(), rptId.c_str());
+    //printf("\n=== ReportCallback [REPORT#%d] ===\n", currentReport);
+    //printf("  RCB: %s, rptId: %s\n", rcbRef.c_str(), rptId.c_str());
     
     auto it = client->activeReports_.find(rcbRef);
     if (it == client->activeReports_.end()) {
-        printf("  WARNING: ReportInfo not found for %s\n", rcbRef.c_str());
+        //printf("  WARNING: ReportInfo not found for %s\n", rcbRef.c_str());
         return;
     }
     ReportInfo& reportInfo = it->second;
@@ -5078,8 +5078,8 @@ void MmsClient::ReportCallback(void* parameter, ClientReport report) {
     
     auto endTime = std::chrono::steady_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime);
-    printf("  Report processing time: %lld ms\n", duration.count());
-    printf("=== ReportCallback END ===\n\n");
+    //printf("  Report processing time: %lld ms\n", duration.count());
+    //printf("=== ReportCallback END ===\n\n");
 }
 
 Napi::Value MmsClient::EnableReporting(const Napi::CallbackInfo& info) {
