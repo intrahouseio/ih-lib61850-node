@@ -704,7 +704,7 @@ namespace {
             std::string fcStr = FunctionalConstraint_toString(fc);
             std::string cacheKey = baseRef + "[" + fcStr + "]";
             outCache[cacheKey] = {cacheKey, fc, names, types};
-            printf("CollectStructureInfo: Cached %s with %zu names\n", cacheKey.c_str(), names.size());
+            //printf("CollectStructureInfo: Cached %s with %zu names\n", cacheKey.c_str(), names.size());
         }
         MmsVariableSpecification_destroy(spec);
     }
@@ -5234,7 +5234,7 @@ Napi::Value MmsClient::EnableReporting(const Napi::CallbackInfo& info) {
         } catch (...) {}
     });
     
-    printf("EnableReporting: SUCCESS for %s -> %s\n", rcbRef.c_str(), datasetRef.c_str());
+    //printf("EnableReporting: SUCCESS for %s -> %s\n", rcbRef.c_str(), datasetRef.c_str());
     return env.Undefined();
 }
 
