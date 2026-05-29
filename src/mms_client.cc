@@ -201,23 +201,26 @@ namespace {
             return "DEL";
         }
         
-        // 10. Специальные нестандартные типы по имени DataObject
+        // 10. Специальные типы по имени DataObject
         std::string lowerName = doRef;
         std::transform(lowerName.begin(), lowerName.end(), lowerName.begin(), ::tolower);
         
-        // PNV -> PNV-WYE, PPV -> PPV-DEL (как в запросе)
+        // SetTO_GGIO1, SetTO_GGIO2, ... → SPG
+        if (lowerName.find("setto_ggio") != std::string::npos) {
+            return "SPG";
+        }
+        
         if (lowerName.find("pnv") != std::string::npos) {
             return "PNV-WYE";
         }
         if (lowerName.find("ppv") != std::string::npos) {
             return "PPV-DEL";
         }
-        // OpEx -> ACT
         if (lowerName.find("opex") != std::string::npos) {
             return "ACT";
         }
         
-        // 11. Эвристика по имени для статусных объектов (SPS)
+        // 11. Эвристика для статусных объектов (SPS)
         if (lowerName.find("alm") != std::string::npos ||
             lowerName.find("ind") != std::string::npos ||
             lowerName.find("loc") != std::string::npos ||
