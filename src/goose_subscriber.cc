@@ -10,7 +10,7 @@
 Napi::FunctionReference NodeGOOSESubscriber::constructor;
 
 Napi::Object NodeGOOSESubscriber::Init(Napi::Env env, Napi::Object exports) {
-    std::cout << "[DEBUG] Initializing NodeGOOSESubscriber class\n";
+    //std::cout << "[DEBUG] Initializing NodeGOOSESubscriber class\n";
     Napi::Function func = DefineClass(env, "NodeGOOSESubscriber", {
         InstanceMethod("subscribe", &NodeGOOSESubscriber::Subscribe),
         InstanceMethod("unsubscribe", &NodeGOOSESubscriber::Unsubscribe),

@@ -3006,7 +3006,7 @@ Napi::Value MmsClient::Connect(const Napi::CallbackInfo& info) {
     }
 
     try {
-        printf("Creating connection to %s:%d, clientID: %s\n", ip.c_str(), port, clientID_.c_str());
+        //printf("Creating connection to %s:%d, clientID: %s\n", ip.c_str(), port, clientID_.c_str());
         running_ = true;
         isClosing_ = false;
         usingPrimaryIp_ = true;
@@ -3022,7 +3022,7 @@ Napi::Value MmsClient::Connect(const Napi::CallbackInfo& info) {
             bool isPrimary = true;
 
             while (running_) {
-                printf("Attempting to connect to %s:%d (attempt %d/%d), clientID: %s\n",
+                //printf("Attempting to connect to %s:%d (attempt %d/%d), clientID: %s\n",
                        currentIp.c_str(), port, (isPrimary ? primaryRetryCount : reserveRetryCount) + 1, maxRetries, clientID_.c_str());
                 
                 if (connection_) {
@@ -3049,7 +3049,7 @@ Napi::Value MmsClient::Connect(const Napi::CallbackInfo& info) {
                 }
 
                 if (connected_) {
-                    printf("Connected successfully to %s:%d, clientID: %s\n", currentIp.c_str(), port, clientID_.c_str());
+                    //printf("Connected successfully to %s:%d, clientID: %s\n", currentIp.c_str(), port, clientID_.c_str());
                     primaryRetryCount = 0;
                     reserveRetryCount = 0;
                     tsfn_.NonBlockingCall([this](Napi::Env env, Napi::Function jsCallback) {
