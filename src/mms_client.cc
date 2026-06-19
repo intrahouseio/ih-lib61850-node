@@ -3021,9 +3021,10 @@ Napi::Value MmsClient::Connect(const Napi::CallbackInfo& info) {
             std::string currentIp = ip;
             bool isPrimary = true;
 
+
             while (running_) {
                 //printf("Attempting to connect to %s:%d (attempt %d/%d), clientID: %s\n",
-                       currentIp.c_str(), port, (isPrimary ? primaryRetryCount : reserveRetryCount) + 1, maxRetries, clientID_.c_str());
+                //       currentIp.c_str(), port, (isPrimary ? primaryRetryCount : reserveRetryCount) + 1, maxRetries, clientID_.c_str());
                 
                 if (connection_) {
                     IedConnection_destroy(connection_);
